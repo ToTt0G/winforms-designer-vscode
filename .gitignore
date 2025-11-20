@@ -1,0 +1,33 @@
+# .gitignore for Visual Editor Extension
+
+# Build results
+[Bb]in/
+[Oo]bj/
+dist/
+out/
+build/
+
+# Visual Studio / VS Code
+.vscode/
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# C# / .NET
+*.pdb
+*.dll
+*.exe
+*.cache
+*.deps.json
+*.runtimeconfig.json
+
+# OS generated files
+.DS_Store
+Thumbs.db

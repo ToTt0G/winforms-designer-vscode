@@ -1,0 +1,59 @@
+{
+  "name": "winforms-designer-modern",
+  "displayName": "Modern WinForms Designer",
+  "description": "A visual Windows Forms designer for VS Code, inspired by Visual Studio 2026.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ToTt0G/winforms-designer-vscode.git"
+  },
+  "publisher": "ToTt0G",
+  "author": {
+    "name": "ToTt0G"
+  },
+  "license": "MIT",
+  "activationEvents": [
+    "onCommand:winforms.openDesigner"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "winforms.openDesigner",
+        "title": "Open WinForms Designer"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "winforms.openDesigner",
+          "when": "resourceExtname == .cs",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "winforms.openDesigner",
+          "when": "resourceExtname == .cs",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^16.x",
+    "typescript": "^5.0.0"
+  }
+}
