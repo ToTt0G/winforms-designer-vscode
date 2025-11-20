@@ -94,6 +94,18 @@ npm install -g @vscode/vsce
 vsce package
 ```
 
+## ⚠️ Known Limitations
+
+### Resource-based Properties
+The following properties require `.resx` resource file support and are not currently supported:
+- **Icon**: Form icons cannot be saved/loaded (requires .resx implementation)
+- **Images**: Image resources for PictureBox and other controls
+- **Localized strings**: Resource-based string localization
+
+These properties may be visible in the property grid but changes will not persist to the `.Designer.cs` file.
+
+**Workaround**: Manually edit the `.Designer.cs` file and create corresponding `.resx` files using Visual Studio or other tools.
+
 ## 🙏 Credits
 
 This extension wraps the excellent [SWD4CS](https://github.com/hry2566/SWD4CS) designer by **hry2566**, making it accessible directly from VS Code.

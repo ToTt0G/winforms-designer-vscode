@@ -2,7 +2,7 @@
   "name": "winforms-designer-modern",
   "displayName": "Modern WinForms Designer",
   "description": "A visual Windows Forms designer for VS Code, inspired by Visual Studio 2026.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -18,9 +18,6 @@
     "name": "ToTt0G"
   },
   "license": "MIT",
-  "activationEvents": [
-    "onCommand:winforms.openDesigner"
-  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [

@@ -252,7 +252,6 @@ namespace SWD4CS
                     break;
                 case "Label":
                     this.ctrl = new Label();
-                    this.ctrl!.AutoSize = true;
                     break;
                 case "GroupBox":
                     this.ctrl = new GroupBox();
@@ -273,7 +272,6 @@ namespace SWD4CS
                     break;
                 case "CheckBox":
                     this.ctrl = new CheckBox();
-                    this.ctrl!.AutoSize = true;
                     break;
                 case "ComboBox":
                     this.ctrl = new ComboBox();
@@ -307,7 +305,6 @@ namespace SWD4CS
                     break;
                 case "LinkLabel":
                     this.ctrl = new LinkLabel();
-                    this.ctrl!.AutoSize = true;
                     break;
                 case "PictureBox":
                     this.ctrl = new PictureBox();
@@ -321,7 +318,6 @@ namespace SWD4CS
                     break;
                 case "RadioButton":
                     this.ctrl = new RadioButton();
-                    this.ctrl!.AutoSize = true;
                     break;
                 case "RichTextBox":
                     this.ctrl = new RichTextBox();
@@ -411,7 +407,6 @@ namespace SWD4CS
                 Label lbl = new Label();
                 lbl.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
                 this.ctrl = lbl;
-                this.ctrl.AutoSize = true;
             }
 
             this.ctrl.Name = className + form!.cnt_Control;

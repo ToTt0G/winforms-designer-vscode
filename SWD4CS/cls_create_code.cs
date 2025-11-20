@@ -243,10 +243,29 @@ namespace SWD4CS
         private static void Get_Code_Property(ref string source, ref string memCode, PropertyInfo item, cls_controls ctrlItems, string space)
         {
             Component? comp = (ctrlItems.nonCtrl!.GetType() == typeof(Component)) ? ctrlItems.ctrl : ctrlItems.nonCtrl;
+
+            // Use PropertyDescriptor to properly detect if property should be serialized
+            // This respects designer defaults rather than programmatic defaults
+            PropertyDescriptor? propertyDescriptor = comp != null ? TypeDescriptor.GetProperties(comp)[item.Name] : null;
+
+            bool shouldSerialize = false;
             Component? baseCtrl = GetBaseCtrl(ctrlItems);
 
-            if (item.GetValue(comp) == null || item.GetValue(baseCtrl) == null) { return; }
-            if (item.GetValue(comp)!.ToString() == item.GetValue(baseCtrl)!.ToString()) { return; }
+            if (propertyDescriptor != null)
+            {
+                // ShouldSerializeValue returns true if the property differs from its default
+                shouldSerialize = comp != null && propertyDescriptor.ShouldSerializeValue(comp);
+            }
+
+            // Also check actual value comparison as fallback
+            // This ensures properties explicitly set in code get serialized
+            if (!shouldSerialize)
+            {
+                if (item.GetValue(comp) == null || item.GetValue(baseCtrl) == null) { return; }
+                shouldSerialize = item.GetValue(comp)!.ToString() != item.GetValue(baseCtrl)!.ToString();
+            }
+
+            if (!shouldSerialize) { return; }
 
             string str1 = space + "    this." + ctrlItems.ctrl!.Name + "." + item.Name;
             string strProperty = Property2String(comp!, item);
@@ -336,7 +355,34 @@ namespace SWD4CS
                 case nameof(System.Windows.Forms.TableLayoutPanelCellBorderStyle):
                 case nameof(System.Windows.Forms.FormStartPosition):
                     return $" = {type}.{value};";
+                case nameof(System.Drawing.Icon):
+                    // Icon requires special handling - ideally should be in .resx
+                    // For now, try to serialize as a file path comment
+                    // NOTE: This won't actually work without .resx support
+                    return "";  // Skip Icon for now - requires .resx file support
             }
+
+            // Try using TypeConverter for types not explicitly handled above
+            try
+            {
+                TypeConverter converter = TypeDescriptor.GetConverter(type);
+                if (converter != null && converter.CanConvertTo(typeof(string)))
+                {
+                    // For enum types and simple types, use the type.value pattern
+                    if (type.IsEnum)
+                    {
+                        return $" = {type}.{value};";
+                    }
+                    // For other types that can convert to string, try to generate appropriate code
+                    // For now, skip complex types that would require special handling (like Icon)
+                    // TODO: Add support for resource-based properties (.resx files)
+                }
+            }
+            catch
+            {
+                // Silently fail for types that can't be converted
+            }
+
             return "";
         }
 
@@ -403,6 +449,10 @@ namespace SWD4CS
                 // "Site",
                 // "Container",
                 "Name",
+                "IsAccessible",
+                "Capture",
+                "Focused",
+                "Cursor",  // Cursor also complex
                 ""
             };
             return !propertyName.Contains(itemName);

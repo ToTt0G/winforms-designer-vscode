@@ -84,6 +84,33 @@ namespace SWD4CS
                         property.SetValue(ctrl, String2CellBorderStyle(propertyValue));
                         return "";
                 }
+
+                // Try using TypeConverter for types not explicitly handled above
+                try
+                {
+                    TypeConverter converter = TypeDescriptor.GetConverter(type);
+                    if (converter != null && converter.CanConvertFrom(typeof(string)))
+                    {
+                        // Extract just the enum value from patterns like "System.Type.EnumValue;"
+                        string cleanValue = propertyValue;
+                        if (cleanValue.Contains("."))
+                        {
+                            cleanValue = cleanValue.Split(".")[^1].Replace(";", "").Trim();
+                        }
+                        
+                        object? convertedValue = converter.ConvertFromString(cleanValue);
+                        if (convertedValue != null)
+                        {
+                            property.SetValue(ctrl, convertedValue);
+                            return "";
+                        }
+                    }
+                }
+                catch
+                {
+                    // Fall through to unimplemented message
+                }
+
                 return "Unimplemented PropertyType : " + type;
                 //Console.WriteLine("Unimplemented PropertyType : " + type);
             }

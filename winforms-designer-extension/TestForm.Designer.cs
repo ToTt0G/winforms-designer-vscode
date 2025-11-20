@@ -30,35 +30,53 @@ namespace WinFormsApp
         {
             this.button1 = new System.Windows.Forms.Button();
             this.textBox1 = new System.Windows.Forms.TextBox();
+            this.Label2 = new System.Windows.Forms.Label();
+            this.SuspendLayout();
             //
             // button1
             //
-            this.button1.Location = new System.Drawing.Point(12, 12);
-            this.button1.Name = "button1";
-            this.button1.Size = new System.Drawing.Size(75, 23);
+            this.button1.Text =  "Click Me";
+            this.button1.Capture =  false;
+            this.button1.IsAccessible =  false;
+            this.button1.Location = new System.Drawing.Point(12,12);
             this.button1.TabIndex = 0;
-            this.button1.Text = "Click Me";
-            // 
+            //
             // textBox1
-            // 
-            this.textBox1.Location = new System.Drawing.Point(12, 50);
-            this.textBox1.Name = "textBox1";
-            this.textBox1.Size = new System.Drawing.Size(100, 23);
+            //
+            this.textBox1.Text =  "textBox1";
+            this.textBox1.Modified =  false;
+            this.textBox1.SelectedText =  "";
+            this.textBox1.SelectionLength = 0;
+            this.textBox1.SelectionStart = 0;
+            this.textBox1.Capture =  false;
+            this.textBox1.IsAccessible =  false;
+            this.textBox1.Location = new System.Drawing.Point(12,50);
             this.textBox1.TabIndex = 1;
-            // 
-            // TestForm
-            // 
-            this.ClientSize = new System.Drawing.Size(300, 200);
+            //
+            // Label2
+            //
+            this.Label2.Text =  "Label2";
+            this.Label2.Capture =  false;
+            this.Label2.IsAccessible =  false;
+            this.Label2.Location = new System.Drawing.Point(152,92);
+            this.Label2.Size = new System.Drawing.Size(124,40);
+            this.Label2.TabIndex = 2;
+         //
+         // form
+         //
+            this.Size = new System.Drawing.Size(320,252);
+            this.Text =  "Test Form";
             this.Controls.Add(this.button1);
             this.Controls.Add(this.textBox1);
-            this.Name = "TestForm";
-            this.Text = "Test Form";
+            this.Controls.Add(this.Label2);
             this.ResumeLayout(false);
-        }
+        } 
 
-        #endregion
+        #endregion 
 
         private System.Windows.Forms.Button button1;
         private System.Windows.Forms.TextBox textBox1;
+        private System.Windows.Forms.Label Label2;
     }
 }
+

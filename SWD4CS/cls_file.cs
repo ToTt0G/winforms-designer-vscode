@@ -242,7 +242,7 @@
                 case 3:
                     split1 = line.Split("=");
                     split2 = split1[0].Split(".");
-                    ctrlName = split2[1].Trim();
+                    if (split2.Length > 1) { ctrlName = split2[1].Trim(); }
                     break;
                 case 4:
                     split1 = line.Split("(");
