@@ -8,4 +8,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="xcopy /Y /S /I &quot;$(TargetDir)*.*&quot; &quot;$(ProjectDir)..\winforms-designer-extension\bin&quot;" />
+  </Target>
+
 </Project>
