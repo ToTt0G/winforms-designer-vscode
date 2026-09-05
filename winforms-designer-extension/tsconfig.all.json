@@ -1,0 +1,19 @@
+{
+    // Whole-tree typecheck: src/ and tests/ in one pass, so `npm test` can no longer
+    // pass while extension.ts is broken. Emits nothing; the build configs still own emit.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": true,
+        "rootDir": "."
+    },
+    "include": [
+        "src/**/*.ts",
+        "tests/**/*.ts"
+    ],
+    "exclude": [
+        "node_modules",
+        ".vscode-test",
+        "out",
+        "out-test"
+    ]
+}

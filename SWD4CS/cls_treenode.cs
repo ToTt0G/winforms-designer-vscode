@@ -3,38 +3,21 @@ namespace SWD4CS
 {
     internal class cls_treenode : TreeNode
     {
-        private cls_treenode[] itemNode = Array.Empty<cls_treenode>();
+        // The control whose children belong under this node. A SplitContainer contributes one
+        // node per panel, so there the container is the SplitterPanel, not the SplitContainer.
+        // Nodes are matched on this reference rather than on Text, so two controls sharing a
+        // name in different containers cannot be attached to the wrong parent.
+        internal Control Container { get; }
 
-        public cls_treenode(string nodeName)
+        public cls_treenode(string nodeName, Control container)
         {
             this.Text = nodeName;
+            this.Container = container;
         }
 
-        internal cls_treenode? Search(string name)
+        internal void AddChild(cls_treenode child)
         {
-            if (Text == name) { return this; }
-
-            foreach (var node in itemNode)
-            {
-                var result = node.Search(name);
-                if (result != null) { return result; }
-            }
-            return null;
-        }
-
-        internal void Add(string name, string className)
-        {
-            Array.Resize(ref itemNode, itemNode.Count() + 1);
-            if (className == "SplitContainer")
-            {
-                itemNode[^1] = new cls_treenode(name + ".Panel1");
-                Array.Resize(ref itemNode, itemNode.Count() + 1);
-                itemNode[^1] = new cls_treenode(name + ".Panel2");
-            }
-            else { itemNode[^1] = new cls_treenode(name); }
-
-            this.Nodes.Clear();
-            this.Nodes.AddRange(itemNode);
+            this.Nodes.Add(child);
             this.Expand();
         }
     }

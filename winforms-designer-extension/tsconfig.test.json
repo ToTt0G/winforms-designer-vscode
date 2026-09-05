@@ -1,0 +1,23 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "outDir": "out-test",
+        "rootDir": ".",
+        "types": [
+            "node"
+        ]
+    },
+    "include": [
+        "src/wine.ts",
+        "tests/**/*.ts"
+    ],
+    // Must be restated: the inherited `exclude` lists "tests", and exclude wins over
+    // include, so without this the test files are silently dropped from the compile
+    // and `node --test` runs whatever stale JS is already in out-test/.
+    "exclude": [
+        "node_modules",
+        ".vscode-test",
+        "out",
+        "out-test"
+    ]
+}

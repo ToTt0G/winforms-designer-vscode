@@ -5,7 +5,10 @@
 [Oo]bj/
 dist/
 out/
+out-test/
 build/
+[Aa]rtifacts/
+TestResults/
 
 # Visual Studio / VS Code
 .vscode/
@@ -27,6 +30,15 @@ yarn-error.log
 *.cache
 *.deps.json
 *.runtimeconfig.json
+
+# Extension and package artifacts
+*.vsix
+*.nupkg
+*.snupkg
+
+# Compiled test output — tests are authored in TypeScript and run from out-test/
+**/tests/**/*.js
+**/tests/**/*.js.map
 
 # OS generated files
 .DS_Store

@@ -1,0 +1,15 @@
+# Sources and tests — only the compiled output in out/ is shipped.
+src/**
+tests/**
+out-test/**
+tsconfig*.json
+
+# Build and packaging artifacts.
+*.vsix
+bin/**/*.pdb
+
+# Sample form used for manual testing.
+TestForm.Designer.cs
+
+.vscodeignore
+eslint.config.mjs

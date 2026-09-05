@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  extension:
+    name: Extension (lint, typecheck, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: winforms-designer-extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.x'
+          cache: npm
+          cache-dependency-path: winforms-designer-extension/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck (src + tests)
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  designer-payload:
+    name: Designer payload (P0-1 regression)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # The Windows TFM cross-compiles on Linux thanks to EnableWindowsTargeting; this is the
+      # only supported way to populate winforms-designer-extension/bin.
+      - name: Publish the designer (self-contained win-x64)
+        run: dotnet publish SWD4CS/SWD4CS.csproj -c Release -r win-x64 --self-contained true
+
+      - name: Assert the payload is a self-contained Windows build (P0-1)
+        run: |
+          set -euo pipefail
+          config=winforms-designer-extension/bin/SWD4CS.runtimeconfig.json
+          if [ ! -f "$config" ]; then
+              echo "P0-1 regression: $config is missing, so the publish did not populate bin/." >&2
+              exit 1
+          fi
+          if ! grep -q includedFrameworks "$config"; then
+              echo "P0-1 regression: $config has no \"includedFrameworks\", so bin/ holds a" >&2
+              echo "framework-dependent build. Something other than the self-contained win-x64" >&2
+              echo "publish wrote to bin/ - see REMEDIATION_PLAN.md, P0-1." >&2
+              exit 1
+          fi
+          # A win-x64 payload is PE only. A Mach-O or ELF file means a host-platform apphost or
+          # native library leaked in, which is exactly the P0-1 corruption.
+          native=$(find winforms-designer-extension/bin -type f -exec file {} + \
+              | grep -E 'Mach-O|ELF' || true)
+          if [ -n "$native" ]; then
+              echo "P0-1 regression: host-platform binaries landed in winforms-designer-extension/bin;" >&2
+              echo "bin/ must contain only the win-x64 publish output - see REMEDIATION_PLAN.md, P0-1:" >&2
+              echo "$native" >&2
+              exit 1
+          fi

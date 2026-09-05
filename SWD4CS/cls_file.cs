@@ -41,7 +41,10 @@
             FILE_INFO fileInfo = new();
             fileInfo.source_FileName = filePath;
             string designCode = System.IO.File.ReadAllText(filePath);
-            string[] line_code = designCode.Split(Environment.NewLine);
+            // Normalise CRLF/CR/LF to '\n' before splitting: splitting on Environment.NewLine
+            // ("\r\n" on Windows/Wine) collapses an LF-only file into a single element, which then
+            // throws IndexOutOfRangeException on the line_code[i + 1] lookahead below.
+            string[] line_code = designCode.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
             int mode = 0;
 
             for (int i = 0; i < line_code.Length; i++)
@@ -73,7 +76,7 @@
                 if (mode == 3)
                 {
                     Read_Ctrl(line_code[i], fileInfo);
-                    if (line_code[i + 1].Contains("this.ResumeLayout(false)")) { mode = 4; }
+                    if (i + 1 < line_code.Length && line_code[i + 1].Contains("this.ResumeLayout(false)")) { mode = 4; }
                 }
             }
             return fileInfo;

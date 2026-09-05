@@ -2,7 +2,7 @@
   "name": "winforms-designer-modern",
   "displayName": "Modern WinForms Designer",
   "description": "A visual Windows Forms designer for VS Code, inspired by Visual Studio 2026.",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -13,13 +13,33 @@
     "type": "git",
     "url": "https://github.com/ToTt0G/winforms-designer-vscode.git"
   },
-  "publisher": "ToTt0G",
+  "publisher": "amocsary",
   "author": {
-    "name": "ToTt0G"
+    "name": "amocsary"
   },
   "license": "MIT",
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Modern WinForms Designer",
+      "properties": {
+        "winformsDesigner.winePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the Wine binary used to run the designer on macOS and Linux. Leave empty to auto-detect (`wine64`/`wine` on `PATH`, then the usual Wine, CrossOver and Whisky locations). Ignored on Windows."
+        },
+        "winformsDesigner.winePrefix": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "`WINEPREFIX` (Wine bottle) to run the designer in. Leave empty to use Wine's default prefix, normally `~/.wine`. Ignored on Windows."
+        },
+        "winformsDesigner.wineDebug": {
+          "type": "string",
+          "default": "-all",
+          "markdownDescription": "`WINEDEBUG` value for the designer process. Defaults to `-all` to silence Wine's `fixme:` chatter; set to e.g. `+relay` when diagnosing a launch failure. Ignored on Windows."
+        }
+      }
+    },
     "commands": [
       {
         "command": "winforms.openDesigner",
@@ -46,11 +66,21 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
+    "compile:test": "tsc -p ./tsconfig.test.json",
+    "test": "npm run compile:test && node --test out-test/tests/wine.test.js",
+    "typecheck": "tsc -p ./tsconfig.all.json",
+    "lint": "eslint src tests",
+    "publish:designer": "dotnet publish ../SWD4CS/SWD4CS.csproj -c Release -r win-x64 --self-contained true",
+    "package": "npm run publish:designer && vsce package",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
-    "@types/vscode": "^1.80.0",
-    "@types/node": "^16.x",
-    "typescript": "^5.0.0"
+    "@eslint/js": "^10.0.1",
+    "@vscode/vsce": "^3.9.2",
+    "@types/node": "^26.x",
+    "@types/vscode": "~1.80.0",
+    "eslint": "^10.8.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0"
   }
 }

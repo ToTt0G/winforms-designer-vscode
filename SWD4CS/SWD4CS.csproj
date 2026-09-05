@@ -2,15 +2,43 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net6.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
 
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Command="xcopy /Y /S /I &quot;$(TargetDir)*.*&quot; &quot;$(ProjectDir)..\winforms-designer-extension\bin&quot;" />
+  <PropertyGroup>
+    <ExtensionBinDir>$(ProjectDir)..\winforms-designer-extension\bin</ExtensionBinDir>
+  </PropertyGroup>
+
+  <!-- `publish` is the *only* writer of the extension's bin/ directory. A plain `dotnet build`
+       used to copy its framework-dependent output over the self-contained publish output,
+       leaving a mixed payload that failed opaquely at launch, so no Build-time copy exists. -->
+  <PropertyGroup>
+    <ExtensionPayloadRequirement>The designer payload in winforms-designer-extension\bin must be a self-contained win-x64 publish. Run: dotnet publish SWD4CS/SWD4CS.csproj -c Release -r win-x64 --self-contained true</ExtensionPayloadRequirement>
+  </PropertyGroup>
+
+  <!-- A publish with the wrong flags must fail loudly rather than half-populate bin/.
+       This lives after Publish, so an ordinary `dotnet build` is unaffected. -->
+  <Target Name="RequireSelfContainedWindowsPublish" AfterTargets="Publish"
+          Condition="'$(RuntimeIdentifier)' != 'win-x64' or '$(SelfContained)' != 'true'">
+    <Error Text="$(ExtensionPayloadRequirement)" />
+  </Target>
+
+  <!-- macOS/Linux (and a self-contained Windows build) run this published output through the
+       extension, so mirror it into bin/. The directory is cleared first so that stale files
+       from an earlier runtime or TFM cannot survive. -->
+  <Target Name="CopyPublishedDesignerToExtension" AfterTargets="Publish"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64' and '$(SelfContained)' == 'true'">
+    <RemoveDir Directories="$(ExtensionBinDir)" />
+    <ItemGroup>
+      <PublishedDesignerFiles Include="$(PublishDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PublishedDesignerFiles)"
+          DestinationFiles="@(PublishedDesignerFiles->'$(ExtensionBinDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
   </Target>
 
 </Project>

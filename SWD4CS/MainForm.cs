@@ -138,46 +138,62 @@ public partial class MainForm : Form
     private void Show_ControlView(cls_userform? form)
     {
         ctrlTreeView.Nodes.Clear();
-        TreeNode NodeRoot = new TreeNode("Form");
-        var itemNode = new List<cls_treenode>();
+        TreeNode nodeRoot = new TreeNode("Form");
+        if (form != null) { Build_ControlNodes(form, nodeRoot); }
+        ctrlTreeView.Nodes.Add(nodeRoot);
+        // TopNode is the root added on the previous line, so it cannot be null here.
+        ctrlTreeView.TopNode!.Expand();
+    }
 
-        if (form != null)
+    // Two passes: every node is created before anything is attached, so the order of
+    // CtrlItems cannot hide a control whose container is declared after it. Anything that
+    // still has no parent node is shown under "(unparented)" rather than dropped.
+    private void Build_ControlNodes(cls_userform form, TreeNode nodeRoot)
+    {
+        var nodesByContainer = new Dictionary<Control, cls_treenode>(ReferenceEqualityComparer.Instance);
+        var created = new List<KeyValuePair<Control, List<cls_treenode>>>();
+
+        foreach (var formCtrl in form.CtrlItems)
         {
-            foreach (var formCtrl in form.CtrlItems)
-            {
-                if (formCtrl.ctrl!.Parent == form)
-                {
-                    if (formCtrl.className == "SplitContainer")
-                    {
-                        itemNode.Add(new cls_treenode(formCtrl.ctrl.Name + ".Panel1"));
-                        itemNode.Add(new cls_treenode(formCtrl.ctrl.Name + ".Panel2"));
-                    }
-                    else { itemNode.Add(new cls_treenode(formCtrl.ctrl.Name)); }
-                }
-                else
-                {
-                    foreach (var node in itemNode)
-                    {
-                        cls_treenode? retNode;
-                        if (formCtrl.ctrl.Parent.Name.IndexOf(".Panel1") > -1)
-                        {
-                            retNode = node.Search(formCtrl.ctrl.Parent.Parent.Name + ".Panel1");
-                        }
-                        else if (formCtrl.ctrl.Parent.Name.IndexOf(".Panel2") > -1)
-                        {
-                            retNode = node.Search(formCtrl.ctrl.Parent.Parent.Name + ".Panel2");
-                        }
-                        else { retNode = node.Search(formCtrl.ctrl.Parent.Name); }
+            Control? ctrl = formCtrl.ctrl;
+            if (ctrl == null) { continue; }
+            // Non-visual components (Timer, dialogs, ...) live on the helper panel and have
+            // never been part of the control tree.
+            if (formCtrl.nonCtrl == null || formCtrl.nonCtrl.GetType() != typeof(Component)) { continue; }
 
-                        if (retNode != null) { retNode.Add(formCtrl.ctrl.Name, formCtrl.className!); break; }
-                    }
-                }
+            var nodes = new List<cls_treenode>();
+            if (formCtrl.className == "SplitContainer" && ctrl is SplitContainer split)
+            {
+                nodes.Add(new cls_treenode(ctrl.Name + ".Panel1", split.Panel1));
+                nodes.Add(new cls_treenode(ctrl.Name + ".Panel2", split.Panel2));
             }
+            else { nodes.Add(new cls_treenode(ctrl.Name, ctrl)); }
+
+            foreach (var node in nodes) { nodesByContainer[node.Container] = node; }
+            created.Add(new KeyValuePair<Control, List<cls_treenode>>(ctrl, nodes));
         }
 
-        if (itemNode.Count > 0) { NodeRoot.Nodes.AddRange(itemNode.ToArray()); }
-        ctrlTreeView.Nodes.Add(NodeRoot);
-        ctrlTreeView.TopNode.Expand();
+        var unparented = new List<cls_treenode>();
+
+        foreach (var entry in created)
+        {
+            Control? parent = entry.Key.Parent;
+
+            if (ReferenceEquals(parent, form)) { nodeRoot.Nodes.AddRange(entry.Value.ToArray()); }
+            else if (parent != null && nodesByContainer.TryGetValue(parent, out cls_treenode? parentNode))
+            {
+                foreach (var node in entry.Value) { parentNode.AddChild(node); }
+            }
+            else { unparented.AddRange(entry.Value); }
+        }
+
+        if (unparented.Count > 0)
+        {
+            TreeNode orphanRoot = new TreeNode("(unparented)");
+            orphanRoot.Nodes.AddRange(unparented.ToArray());
+            nodeRoot.Nodes.Add(orphanRoot);
+            orphanRoot.Expand();
+        }
     }
 
     private void change_EventsName(string oldName, int index)
