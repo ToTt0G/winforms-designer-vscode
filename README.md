@@ -4,7 +4,7 @@ A powerful Windows Forms visual designer extension for Visual Studio Code. Desig
 
 ![Visual Studio Code](https://img.shields.io/badge/VS%20Code-1.80%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
-![.NET](https://img.shields.io/badge/.NET-6.0%2B-purple)
+![.NET](https://img.shields.io/badge/.NET-6_Windows_Desktop-purple)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## ✨ Features
@@ -20,7 +20,7 @@ A powerful Windows Forms visual designer extension for Visual Studio Code. Desig
 
 ### Option 1: Install from VSIX (Recommended)
 
-1. Download the latest `.vsix` file from the [Releases](../../releases) page
+1. Download the latest `.vsix` file from the [GitHub Releases](https://github.com/ToTt0G/winforms-designer-vscode/releases) page
 2. Open VS Code
 3. Go to Extensions view (`Ctrl+Shift+X`)
 4. Click the **`...`** menu → **Install from VSIX...**
