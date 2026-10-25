@@ -10,11 +10,11 @@ A powerful Windows Forms visual designer extension for Visual Studio Code. Desig
 ## ✨ Features
 
 - **🎨 Visual Designer**: Drag and drop controls just like in Visual Studio
-- **🔄 Two-way Synchronization**: Changes in the designer automatically update your `.Designer.cs` code
+- **💾 Designer Code Saving**: Save visual edits back to your `.Designer.cs` file
 - **🌙 Modern Dark UI**: Seamlessly matches VS Code's dark theme
 - **⚙️ Property Grid**: Edit control properties with an intuitive interface
 - **🧰 Toolbox**: Quick access to all common Windows Forms controls
-- **🚀 Context Menu Integration**: Right-click any `.cs` file to open the designer
+- **🚀 Context Menu Integration**: Right-click a form's `.cs` or `.Designer.cs` file to open the designer
 
 ## 📦 Installation
 
@@ -31,11 +31,15 @@ A powerful Windows Forms visual designer extension for Visual Studio Code. Desig
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/winforms-designer-vscode.git
+git clone https://github.com/ToTt0G/winforms-designer-vscode.git
 cd winforms-designer-vscode
 
+# Build the Windows designer and copy its runtime files into the extension
+dotnet build SWD4CS/SWD4CS.csproj --configuration Release
+
 # Install dependencies
-npm install
+cd winforms-designer-extension
+npm ci
 
 # Compile the extension
 npm run compile
@@ -46,7 +50,7 @@ npx vsce package
 
 ## 🚀 Usage
 
-1. Open any C# Windows Forms file (`.cs`) in VS Code
+1. Open a C# Windows Forms file (`Form1.cs` or `Form1.Designer.cs`) in VS Code. Opening `Form1.cs` resolves its sibling `Form1.Designer.cs`; C# files without a matching designer are rejected.
 2. **Right-click** the file in:
    - **Explorer** sidebar, or
    - **Editor tab** at the top
@@ -58,12 +62,13 @@ npx vsce package
    ```
 
 4. The visual designer will launch in a separate window
-5. Design your form visually—changes sync back to your `.Designer.cs` file!
+5. Design your form visually and use **File → Save** in the designer to write the `.Designer.cs` file. Unsaved editor changes to the selected form and its designer are saved before launch; cancelling that save cancels launch. External edits made while the designer is open are not synchronized or conflict-checked.
 
 ## 📋 Requirements
 
 - **Operating System**: Windows (WinForms is Windows-only)
-- **.NET Runtime**: .NET 6.0 or later
+- **.NET Runtime**: .NET 6 Windows Desktop Runtime (the designer currently targets `net6.0-windows`; a newer major runtime alone is not sufficient)
+- **Building from source**: a .NET SDK capable of building `net6.0-windows`, plus Node.js/npm
 - **VS Code**: Version 1.80.0 or higher
 
 ## 🛠️ Development
@@ -90,8 +95,19 @@ winforms-designer-extension/
 ### Building the VSIX Package
 
 ```bash
-npm install -g @vscode/vsce
-vsce package
+# From the repository root, rebuild the executable before packaging:
+dotnet build SWD4CS/SWD4CS.csproj --configuration Release
+cd winforms-designer-extension
+npm ci
+npm run compile
+npx @vscode/vsce package
+```
+
+### Regression checks (Windows)
+
+```bash
+dotnet run --project Tests/RegressionTests/RegressionTests.csproj --configuration Release
+npm --prefix winforms-designer-extension test
 ```
 
 ## ⚠️ Known Limitations

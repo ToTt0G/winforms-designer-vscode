@@ -1,0 +1,5 @@
+src/**
+test/**
+tsconfig.json
+**/*.map
+bin/**/*.pdb

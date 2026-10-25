@@ -40,8 +40,7 @@
         {
             FILE_INFO fileInfo = new();
             fileInfo.source_FileName = filePath;
-            string designCode = System.IO.File.ReadAllText(filePath);
-            string[] line_code = designCode.Split(Environment.NewLine);
+            string[] line_code = File.ReadAllLines(filePath);
             int mode = 0;
 
             for (int i = 0; i < line_code.Length; i++)
@@ -73,7 +72,7 @@
                 if (mode == 3)
                 {
                     Read_Ctrl(line_code[i], fileInfo);
-                    if (line_code[i + 1].Contains("this.ResumeLayout(false)")) { mode = 4; }
+                    if (i + 1 < line_code.Length && line_code[i + 1].Contains("this.ResumeLayout(false)")) { mode = 4; }
                 }
             }
             return fileInfo;
@@ -89,15 +88,14 @@
 
         private static void Read_Ctrl(string line_code, FILE_INFO fileInfo)
         {
-            if (!line_code.Contains("this.")) { return; }
-            if (line_code.Contains("+=")) { Read_Events(line_code, fileInfo); }
-            else if (line_code.Contains("Controls.Add")) { Read_Parent(line_code, fileInfo, PARENT); }
-            else if (line_code.Contains("="))
+            if (!line_code.TrimStart().StartsWith("this.", StringComparison.Ordinal)) { return; }
+            int assignment = line_code.IndexOf('=');
+            if (assignment >= 0)
             {
-                string[] spl1 = line_code.Split("=");
-                if (spl1[0].Split(".").Length == 2) { Read_Property(line_code, fileInfo, PROPERTY); }
+                if (line_code[..assignment].TrimEnd().EndsWith("+", StringComparison.Ordinal)) { Read_Events(line_code, fileInfo); }
                 else { Read_Property(line_code, fileInfo, PROPERTY); }
             }
+            else if (line_code.Contains("Controls.Add")) { Read_Parent(line_code, fileInfo, PARENT); }
         }
 
         private static void Read_Events(string line_code, FILE_INFO fileInfo)
@@ -177,9 +175,15 @@
 
         private static string GetFunc(string line_code)
         {
-            string[] split1 = line_code.Split("+=");
-            string[] split2 = split1[1].Split("(");
-            return split2[1].Replace(");", "");
+            string handler = line_code[(line_code.IndexOf("+=", StringComparison.Ordinal) + 2)..].Trim().TrimEnd(';').TrimEnd();
+            if (handler.StartsWith("new ", StringComparison.Ordinal))
+            {
+                int open = handler.IndexOf('(');
+                int close = handler.LastIndexOf(')');
+                if (open < 0 || close <= open) { throw new FormatException("Invalid event delegate constructor."); }
+                handler = handler[(open + 1)..close].Trim();
+            }
+            return handler.StartsWith("this.", StringComparison.Ordinal) ? handler[5..] : handler;
         }
 
         private static string GetEvents(string line_code)
@@ -192,14 +196,14 @@
 
         private static string GetProperty(string line)
         {
-            string[] split1 = line.Split("=");
-            return split1[1].Replace(";", "").Replace("\"", "").Trim();
+            string expression = line[(line.IndexOf('=') + 1)..].Trim();
+            if (expression.EndsWith(";", StringComparison.Ordinal)) { expression = expression[..^1].TrimEnd(); }
+            return CSharpStringLiteral.Decode(expression);
         }
 
         private static string GetPropertyName(string line)
         {
-            string[] split1 = line.Split(" = ");
-            string[] split2 = split1[0].Split(".");
+            string[] split2 = line[..line.IndexOf('=')].Split(".");
             return split2[split2.Length - 1].Trim();
         }
 

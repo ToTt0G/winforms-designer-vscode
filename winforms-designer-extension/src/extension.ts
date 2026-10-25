@@ -6,7 +6,7 @@ import * as fs from 'fs';
 export function activate(context: vscode.ExtensionContext) {
     console.log('WinForms Designer extension is now active!');
 
-    let disposable = vscode.commands.registerCommand('winforms.openDesigner', (uri: vscode.Uri) => {
+    let disposable = vscode.commands.registerCommand('winforms.openDesigner', async (uri: vscode.Uri) => {
         if (!uri && vscode.window.activeTextEditor) {
             uri = vscode.window.activeTextEditor.document.uri;
         }
@@ -19,8 +19,26 @@ export function activate(context: vscode.ExtensionContext) {
         const filePath = uri.fsPath;
 
         // Check if it's a .cs file
-        if (!filePath.endsWith('.cs')) {
+        if (uri.scheme !== 'file' || !filePath.toLowerCase().endsWith('.cs')) {
             vscode.window.showErrorMessage('Please select a C# (.cs) file.');
+            return;
+        }
+
+        const designerPath = filePath.toLowerCase().endsWith('.designer.cs')
+            ? filePath
+            : filePath.slice(0, -3) + '.Designer.cs';
+
+        // The external designer reads from disk. Save only the selected form and
+        // its companion, and respect a cancelled/failed save before launching.
+        for (const document of vscode.workspace.textDocuments) {
+            if (document.uri.scheme === 'file' && document.isDirty &&
+                [filePath, designerPath].some(candidate => candidate.toLowerCase() === document.uri.fsPath.toLowerCase())) {
+                if (!await document.save()) { return; }
+            }
+        }
+
+        if (!fs.existsSync(designerPath)) {
+            vscode.window.showErrorMessage(`No Windows Forms designer file found: ${designerPath}`);
             return;
         }
 
@@ -36,10 +54,10 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (fs.existsSync(designerExe)) {
             cmd = designerExe;
-            args = [filePath];
+            args = [designerPath];
         } else if (fs.existsSync(designerDll)) {
             cmd = 'dotnet';
-            args = [designerDll, filePath];
+            args = [designerDll, designerPath];
         } else {
             vscode.window.showErrorMessage(`Designer executable not found at: ${designerExe}`);
             return;
@@ -50,7 +68,8 @@ export function activate(context: vscode.ExtensionContext) {
         try {
             const child = child_process.spawn(cmd, args, {
                 detached: false,
-                stdio: ['ignore', 'pipe', 'pipe']
+                cwd: path.dirname(designerPath),
+                stdio: ['ignore', 'ignore', 'pipe']
             });
 
             let errorOutput = '';

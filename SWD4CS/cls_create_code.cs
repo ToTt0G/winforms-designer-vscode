@@ -329,7 +329,7 @@ namespace SWD4CS
                     Size size = (Size)value;
                     return $" = new {type}({size.Width},{size.Height});";
                 case nameof(System.String):
-                    return $" =  \"{value}\";";
+                    return $" = {CSharpStringLiteral.Encode((string)value)};";
                 case nameof(System.Boolean):
                     return $" =  {value.ToString()!.ToLower()};";
                 case nameof(System.Windows.Forms.AnchorStyles):
