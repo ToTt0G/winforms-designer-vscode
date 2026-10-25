@@ -44,8 +44,10 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run build:designer && npm run compile",
+    "build:designer": "dotnet build ../SWD4CS/SWD4CS.csproj --configuration Release",
     "compile": "tsc -p ./",
+    "test": "npm run compile && node --test test/*.test.js",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
