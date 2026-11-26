@@ -1022,6 +1022,66 @@ async function runSuite() {
       );
     });
 
+    // -----------------------------------------------------------------------
+    // 11. Unintrusive GitHub Star Prompt Toast
+    // -----------------------------------------------------------------------
+    await runTest('11. Unintrusive GitHub Star toast: hidden initially, suppressed in modals/modes, emits actions', async () => {
+      const payload = makeOrderInitPayload();
+      await initDesigner(page, server.url, payload);
+
+      const toast = page.locator('[data-testid="star-prompt"]');
+      assert.equal(await toast.count(), 0, 'Star prompt must stay hidden on initial load');
+
+      // Focus the canvas and ensure dispatching showStarPrompt shows the card without stealing focus
+      await page.locator('.wd-canvas').click({ position: { x: 12, y: 12 } });
+      await page.evaluate(() => {
+        window.__WINFORMS_DESIGNER__.dispatchHostMessage({
+          type: 'showStarPrompt',
+          repoUrl: 'https://github.com/ToTt0G/winforms-designer-vscode',
+        });
+      });
+      const toastBox = await assertNonZeroBox(toast, 'GitHub Star toast');
+      const propsBox = await assertNonZeroBox(page.locator('.wd-props'), 'Properties pane');
+      assert.ok(
+        toastBox.x + toastBox.width <= propsBox.x + 2,
+        `Star toast right edge (${toastBox.x + toastBox.width}) should stay left of Properties pane (${propsBox.x})`
+      );
+
+      // Suppressed cleanly while Preview modal is open, then reappears when closed
+      await page.locator('[data-testid="toolbar-preview-btn"]').click();
+      await page.locator('.wd-preview').waitFor({ state: 'visible' });
+      assert.equal(await toast.count(), 0, 'Star prompt should hide while Preview modal is open');
+      await page.locator('.wd-preview [aria-label="Close preview"]').click();
+      await page.locator('.wd-preview').waitFor({ state: 'detached' });
+      await assertNonZeroBox(toast, 'GitHub Star toast restored after Preview closes');
+
+      // Click Star on GitHub -> emits starPromptAction('star') and hides
+      await clearSentMessages(page);
+      await page.locator('[data-testid="star-prompt-star"]').click();
+      await toast.waitFor({ state: 'detached', timeout: 5000 });
+      let starMsgs = (await getSentMessages(page)).filter((m) => m.type === 'starPromptAction');
+      assert.deepEqual(starMsgs, [{ type: 'starPromptAction', action: 'star' }]);
+
+      // Re-dispatch and verify Later + Dismiss actions
+      for (const [btnTestId, expectedAction] of [
+        ['star-prompt-later', 'later'],
+        ['star-prompt-dismiss', 'dismiss'],
+      ]) {
+        await clearSentMessages(page);
+        await page.evaluate(() => {
+          window.__WINFORMS_DESIGNER__.dispatchHostMessage({
+            type: 'showStarPrompt',
+            repoUrl: 'https://github.com/ToTt0G/winforms-designer-vscode',
+          });
+        });
+        await assertNonZeroBox(toast, `GitHub Star toast before ${expectedAction}`);
+        await page.locator(`[data-testid="${btnTestId}"]`).click();
+        await toast.waitFor({ state: 'detached', timeout: 5000 });
+        starMsgs = (await getSentMessages(page)).filter((m) => m.type === 'starPromptAction');
+        assert.deepEqual(starMsgs, [{ type: 'starPromptAction', action: expectedAction }]);
+      }
+    });
+
     await context.close();
   } finally {
     if (browser) {

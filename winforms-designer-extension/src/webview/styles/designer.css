@@ -924,6 +924,15 @@ button {
   outline: none;
 }
 
+/* Non-scrolling stage around the canvas: anchors overlays (star prompt) to the visible viewport. */
+.wd-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ---------------------------------------------------------------- canvas */
 
 .wd-canvas {
@@ -4708,4 +4717,142 @@ textarea.wf-live-input {
 
 .wd-lvc-preview span.on {
   background: #cce8ff;
+}
+
+/* ------------------------------------------------------------ star prompt */
+
+.wd-star-prompt {
+  --wd-star: #e5a93c;
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  z-index: 30;
+  width: 296px;
+  max-width: calc(100% - 40px);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 32px 12px 12px;
+  background: var(--wd-widget);
+  color: var(--wd-fg);
+  border: 1px solid var(--wd-widget-border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px var(--wd-shadow), 0 1px 3px var(--wd-shadow);
+  font-size: 12px;
+  line-height: 1.4;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+:root[data-theme='light'] .wd-star-prompt {
+  --wd-star: #c58316;
+}
+
+:root[data-theme='high-contrast'] .wd-star-prompt {
+  --wd-star: #ffd36b;
+  border-color: var(--vscode-contrastBorder, #6fc3df);
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wd-star-prompt {
+    animation: wd-star-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+}
+
+@keyframes wd-star-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.wd-star-prompt-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--wd-star);
+  background: color-mix(in srgb, var(--wd-star) 14%, transparent);
+}
+
+:root[data-theme='high-contrast'] .wd-star-prompt-icon {
+  background: transparent;
+  border: 1px solid var(--wd-star);
+}
+
+.wd-star-prompt-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.wd-star-prompt-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.wd-star-prompt-text {
+  margin: 2px 0 0;
+  color: var(--wd-muted);
+}
+
+.wd-star-prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.wd-star-prompt-primary svg {
+  flex: none;
+}
+
+.wd-star-prompt-quiet,
+.wd-star-prompt-close {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--wd-muted);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.wd-star-prompt-quiet {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.wd-star-prompt-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.wd-star-prompt-quiet:hover,
+.wd-star-prompt-close:hover {
+  background: var(--wd-tb-hover);
+  color: var(--wd-fg);
+}
+
+.wd-star-prompt button:focus-visible {
+  outline: 1px solid var(--wd-focus);
+  outline-offset: 1px;
+}
+
+:root[data-theme='high-contrast'] .wd-star-prompt-quiet:hover,
+:root[data-theme='high-contrast'] .wd-star-prompt-close:hover {
+  outline: 1px dashed var(--vscode-contrastActiveBorder, #f38518);
+  outline-offset: -1px;
 }

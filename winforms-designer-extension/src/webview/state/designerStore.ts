@@ -89,6 +89,8 @@ export interface DesignerState {
   /** True when the host marked the document unsafe to write back visually (`metadata.readOnlyReason`). */
   readOnly: boolean;
   readOnlyReason: string;
+  /** GitHub star prompt requested by the host; null when hidden. */
+  starPrompt: { repoUrl: string } | null;
 }
 
 type Listener = () => void;
@@ -145,6 +147,7 @@ export class DesignerStore {
       isStandalone,
       readOnly: false,
       readOnlyReason: '',
+      starPrompt: null,
     };
   }
 
@@ -383,6 +386,9 @@ export class DesignerStore {
       case 'eventHandlerReady':
         this.handleEventHandlerReady(msg);
         break;
+      case 'showStarPrompt':
+        this.setState({ starPrompt: { repoUrl: msg.repoUrl } });
+        break;
       case 'command':
         switch (msg.command) {
           case 'undo':
@@ -412,6 +418,12 @@ export class DesignerStore {
         }
         break;
     }
+  }
+
+  /** Hides the star prompt and reports the user's choice to the host. */
+  respondToStarPrompt(action: 'star' | 'later' | 'dismiss') {
+    this.setState({ starPrompt: null });
+    this.send({ type: 'starPromptAction', action });
   }
 
   // ---- settings / view ----------------------------------------------------

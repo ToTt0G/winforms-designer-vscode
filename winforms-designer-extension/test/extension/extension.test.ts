@@ -405,6 +405,13 @@ const mockVscode = {
       return undefined;
     },
   },
+  env: {
+    openedExternals: [] as string[],
+    async openExternal(uri: MockUri) {
+      mockVscode.env.openedExternals.push(uri.toString());
+      return true;
+    },
+  },
 };
 
 // Hook Node's Module._load BEFORE requiring any module that imports 'vscode'
@@ -1643,6 +1650,92 @@ partial class SyncForm
       assert.equal(conflictAck.accepted, false);
       assert.equal(conflictAck.reason, 'conflict');
       assert.match(doc.getText(), /"External Edit"/);
+
+      panel._dispose();
+    });
+
+    it('emits showStarPrompt after sustained visual edits and opens GitHub on starPromptAction', async () => {
+      mockVscode.env.openedExternals.length = 0;
+      const designerCs = path.join(tempDir, 'StarForm.Designer.cs');
+      const initialSrc = [
+        'namespace StarApp;',
+        'partial class StarForm',
+        '{',
+        '    private System.ComponentModel.IContainer? components = null;',
+        '    #region Windows Form Designer generated code',
+        '    private void InitializeComponent()',
+        '    {',
+        '        this.SuspendLayout();',
+        '        this.ClientSize = new System.Drawing.Size(400, 300);',
+        '        this.Name = "StarForm";',
+        '        this.Text = "Initial";',
+        '        this.ResumeLayout(false);',
+        '    }',
+        '    #endregion',
+        '}',
+        '',
+      ].join('\n');
+      fs.writeFileSync(designerCs, initialSrc, 'utf8');
+
+      const memStore = new Map<string, unknown>();
+      const ctx = {
+        ...createMockContext(tempDir),
+        globalState: {
+          get: <T>(k: string) => memStore.get(k) as T | undefined,
+          update: async (k: string, v: unknown) => {
+            memStore.set(k, v);
+          },
+        },
+        extension: { packageJSON: { version: '1.0.1' } },
+      } as unknown as vscodeTypes.ExtensionContext;
+
+      const doc = createMockTextDocument(MockUri.file(designerCs), initialSrc);
+      mockState.textDocuments.push(doc);
+      const panel = createMockWebviewPanel();
+      const provider = new customEditorMod.WinFormsCustomEditorProvider(ctx);
+      await provider.resolveCustomTextEditor(
+        doc as unknown as vscodeTypes.TextDocument,
+        panel as unknown as vscodeTypes.WebviewPanel,
+        {} as vscodeTypes.CancellationToken
+      );
+
+      panel._sendFromWebview({ type: 'ready' });
+      await new Promise((r) => setTimeout(r, 15));
+      const initMsg = panel._postedMessages.find((m) => m.type === 'init');
+      assert.ok(initMsg && initMsg.type === 'init');
+
+      // Perform 12 real visual edits
+      let latestVersion = initMsg.documentVersion!;
+      for (let i = 1; i <= 12; i++) {
+        const nextDoc = structuredClone(initMsg.document);
+        nextDoc.form.properties.Text = `Edit ${i}`;
+        delete nextDoc.form.rawPropertyExpressions?.Text;
+        panel._sendFromWebview({
+          type: 'applyDocument',
+          document: nextDoc,
+          baseDocumentVersion: latestVersion,
+          revision: i,
+        });
+        await new Promise((r) => setTimeout(r, 10));
+        const lastAck = [...panel._postedMessages].reverse().find((m) => m.type === 'applyAck');
+        if (lastAck && lastAck.type === 'applyAck') {
+          latestVersion = lastAck.documentVersion;
+        }
+      }
+
+      await new Promise((r) => setTimeout(r, 30));
+      const starPrompts = panel._postedMessages.filter((m) => m.type === 'showStarPrompt');
+      assert.equal(starPrompts.length, 1, 'Should emit showStarPrompt exactly once on 12th edit');
+      assert.equal(
+        starPrompts[0].type === 'showStarPrompt' ? starPrompts[0].repoUrl : '',
+        'https://github.com/ToTt0G/winforms-designer-vscode'
+      );
+
+      panel._sendFromWebview({ type: 'starPromptAction', action: 'star' });
+      await new Promise((r) => setTimeout(r, 15));
+      assert.deepEqual(mockVscode.env.openedExternals, [
+        'https://github.com/ToTt0G/winforms-designer-vscode',
+      ]);
 
       panel._dispose();
     });

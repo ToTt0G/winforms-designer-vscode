@@ -74,6 +74,10 @@ export type HostToWebviewMessage =
         | 'zoomIn'
         | 'zoomOut'
         | 'zoomReset';
+    }
+  | {
+      type: 'showStarPrompt';
+      repoUrl: string;
     };
 
 export type WebviewToHostMessage =
@@ -125,4 +129,8 @@ export type WebviewToHostMessage =
       type: 'updateSetting';
       key: keyof DesignerSettings;
       value: unknown;
+    }
+  | {
+      type: 'starPromptAction';
+      action: 'star' | 'later' | 'dismiss';
     };

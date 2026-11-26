@@ -22,6 +22,7 @@ import {
   sameFilePath,
   type ResolvedFormFiles,
 } from './formResolver';
+import { GITHUB_REPO_URL, StarPromptController } from './starPrompt';
 
 export interface CoreDependencies {
   parseDesignerCs: typeof coreApi.parseDesignerCs;
@@ -451,12 +452,14 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
   private readonly sessions = new Map<string, SessionState>();
   private lastActiveDesignerUri?: vscode.Uri;
   private readonly core: CoreDependencies;
+  private readonly starPrompt: StarPromptController;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     coreDeps?: Partial<CoreDependencies>
   ) {
     this.core = { ...DEFAULT_CORE_DEPS, ...coreDeps };
+    this.starPrompt = new StarPromptController(context.globalState);
   }
 
   public getActiveDesignerUri(): vscode.Uri | undefined {
@@ -862,6 +865,13 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
             themeKind: getThemeKind(vscode.window.activeColorTheme),
             resourceDataUris: payload.resourceDataUris,
           });
+
+          if (!payload.doc.metadata?.readOnlyReason) {
+            const extVersion = (
+              this.context.extension?.packageJSON as { version?: string } | undefined
+            )?.version;
+            void this.starPrompt.recordSessionOpen(extVersion);
+          }
           break;
         }
 
@@ -924,6 +934,11 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
 
         case 'updateSetting': {
           await updateDesignerSetting(msg.key, msg.value, session.document.uri);
+          break;
+        }
+
+        case 'starPromptAction': {
+          await this.starPrompt.handleAction(msg.action);
           break;
         }
       }
@@ -1160,6 +1175,13 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
       documentVersion: session.document.version,
       accepted: true,
     });
+
+    if (await this.starPrompt.recordSuccessfulEdit()) {
+      postMessage({
+        type: 'showStarPrompt',
+        repoUrl: GITHUB_REPO_URL,
+      });
+    }
   }
 
   private async handleNavigateToEvent(

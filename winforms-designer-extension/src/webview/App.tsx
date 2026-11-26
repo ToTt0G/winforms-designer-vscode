@@ -13,6 +13,7 @@ import { DocumentOutline } from './components/DocumentOutline';
 import { PreviewModal } from './components/PreviewModal';
 import { PropertyGrid } from './components/PropertyGrid';
 import { ShortcutsModal } from './components/ShortcutsModal';
+import { StarPrompt } from './components/StarPrompt';
 import { Toolbar } from './components/Toolbar';
 import { Toolbox } from './components/Toolbox';
 
@@ -309,7 +310,12 @@ export function App({ store }: { store: DesignerStore }) {
         </aside>
         <div className="wd-splitter-v" role="separator" aria-orientation="vertical" onPointerDown={(e) => startDrag(e, 'left')} />
         <main className="wd-center">
-          <DesignCanvas state={state} store={store} />
+          <div className="wd-stage">
+            <DesignCanvas state={state} store={store} />
+            {state.starPrompt && !(state.previewOpen || state.collectionEditor || shortcutsOpen || state.tabOrderMode || state.placementTool || state.readOnly) ? (
+              <StarPrompt store={store} />
+            ) : null}
+          </div>
           <ComponentTray state={state} store={store} />
         </main>
         <div className="wd-splitter-v" role="separator" aria-orientation="vertical" onPointerDown={(e) => startDrag(e, 'right')} />

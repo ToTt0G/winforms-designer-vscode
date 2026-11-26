@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1 — 2026-11-26
+
+### Added
+
+- Added an unobtrusive, dismissible GitHub Star toast inside the designer canvas that appears only after sustained visual editing (or returning after an update), with **Star on GitHub**, **Later** (14-day snooze), and **Don't ask again** persistence in VS Code `globalState`.
+
+### Fixed
+
+- Preserved actual on-disk filename casing when resolving sibling `.cs` / `.Designer.cs` / `.resx` files on Windows and macOS case-insensitive filesystems.
+- Fixed cross-platform unit test glob discovery on Windows.
+
 ## 1.0.0 — 2026-11-26
 
 Complete rewrite replacing the external Windows-only `.NET 6` `SWD4CS.exe` process with a native, cross-platform VS Code Custom Editor (`winformsDesigner.editor`).

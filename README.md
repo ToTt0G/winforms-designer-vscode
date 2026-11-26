@@ -33,10 +33,10 @@ Search for **Modern WinForms Designer** (`ToTt0G.winforms-designer-modern`) in y
 
 ### Install from VSIX
 
-Download `winforms-designer-modern-1.0.0.vsix` from [GitHub Releases](https://github.com/ToTt0G/winforms-designer-vscode/releases) and install it via the CLI:
+Download the latest `.vsix` from [GitHub Releases](https://github.com/ToTt0G/winforms-designer-vscode/releases) and install it via the CLI:
 
 ```bash
-code --install-extension winforms-designer-modern-1.0.0.vsix
+code --install-extension winforms-designer-modern-*.vsix
 ```
 
 Or open Extensions (`Ctrl+Shift+X`), open the **`...`** menu, and choose **Install from VSIX...**.

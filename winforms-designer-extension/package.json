@@ -2,7 +2,7 @@
   "name": "winforms-designer-modern",
   "displayName": "Modern WinForms Designer",
   "description": "A visual Windows Forms designer inside VS Code, inspired by Visual Studio 2026.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "ToTt0G",
   "author": {
     "name": "ToTt0G"
