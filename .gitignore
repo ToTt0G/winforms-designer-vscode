@@ -1,15 +1,16 @@
-# .gitignore for Visual Editor Extension
-
-# Build results
+# Build & packaging outputs
 [Bb]in/
 [Oo]bj/
 dist/
 out/
+out-test/
 build/
+*.vsix
 
 # Visual Studio / VS Code
 .vscode/
 .vs/
+.vscode-test/
 *.suo
 *.user
 *.userosscache

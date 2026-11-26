@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <title>Modern WinForms Designer</title>
+  <defs>
+    <!-- Tile: matte neutral graphite, no colour cast -->
+    <linearGradient id="tile" x1="128" y1="8" x2="128" y2="248" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1D2025"/>
+      <stop offset="1" stop-color="#111317"/>
+    </linearGradient>
+    <linearGradient id="tileRim" x1="128" y1="8" x2="128" y2="248" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5A616C"/>
+      <stop offset="0.18" stop-color="#323740"/>
+      <stop offset="1" stop-color="#262A31"/>
+    </linearGradient>
+
+    <!-- Form window -->
+    <linearGradient id="titleBar" x1="32" y1="40" x2="224" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F766E"/>
+      <stop offset="1" stop-color="#0D9488"/>
+    </linearGradient>
+    <linearGradient id="titleSheen" x1="0" y1="40" x2="0" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.14"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="windowBody" x1="128" y1="74" x2="128" y2="216" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F6F8FA"/>
+      <stop offset="1" stop-color="#EDF0F3"/>
+    </linearGradient>
+    <linearGradient id="windowEdge" x1="128" y1="40" x2="128" y2="216" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#0B0D10" stop-opacity="0.35"/>
+    </linearGradient>
+    <pattern id="dots" x="0" y="0" width="12" height="12" patternUnits="userSpaceOnUse">
+      <circle cx="6" cy="6" r="1.15" fill="#CBD5E1"/>
+    </pattern>
+    <clipPath id="bodyClip">
+      <path d="M32 74H224V200A16 16 0 0 1 208 216H48A16 16 0 0 1 32 200Z"/>
+    </clipPath>
+
+    <!-- Primary button: burnt tangerine to signal amber -->
+    <linearGradient id="button" x1="106" y1="192" x2="190" y2="156" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EA580C"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <linearGradient id="buttonSheen" x1="0" y1="156" x2="0" y2="174" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="windowShadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="buttonShadow" x="-20%" y="-30%" width="140%" height="180%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#7C2D12" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- ===== Tile ===== -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#tile)"/>
+  <rect x="9" y="9" width="238" height="238" rx="51" stroke="url(#tileRim)" stroke-width="2"/>
+
+  <!-- ===== Form window (scaled about tile centre for small-size legibility) ===== -->
+  <g transform="translate(128 128) scale(1.08) translate(-128 -128)">
+  <g filter="url(#windowShadow)">
+    <rect x="32" y="40" width="192" height="176" rx="16" fill="url(#windowBody)"/>
+  </g>
+
+  <!-- Designer canvas dot grid -->
+  <rect x="32" y="74" width="192" height="142" fill="url(#dots)" clip-path="url(#bodyClip)"/>
+
+  <!-- Title bar -->
+  <path d="M48 40H208A16 16 0 0 1 224 56V74H32V56A16 16 0 0 1 48 40Z" fill="url(#titleBar)"/>
+  <path d="M48 40H208A16 16 0 0 1 224 56V74H32V56A16 16 0 0 1 48 40Z" fill="url(#titleSheen)"/>
+  <path d="M48 40.75H208A15.25 15.25 0 0 1 223.25 56" stroke="#FFFFFF" stroke-opacity="0.3" stroke-width="1"/>
+  <path d="M32 74H224" stroke="#0B4F4A" stroke-opacity="0.7" stroke-width="1.5"/>
+
+  <!-- App glyph (2x2 tiles) -->
+  <g fill="#FFFFFF">
+    <rect x="45" y="50" width="6" height="6" rx="1.5"/>
+    <rect x="53" y="50" width="6" height="6" rx="1.5" fill-opacity="0.75"/>
+    <rect x="45" y="58" width="6" height="6" rx="1.5" fill-opacity="0.75"/>
+    <rect x="53" y="58" width="6" height="6" rx="1.5" fill-opacity="0.5"/>
+  </g>
+  <!-- Caption placeholder -->
+  <rect x="67" y="54" width="44" height="6" rx="3" fill="#FFFFFF" fill-opacity="0.5"/>
+
+  <!-- Window controls: minimize / maximize / close -->
+  <g stroke="#FFFFFF" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M167 57H175"/>
+    <rect x="185" y="53" width="8" height="8" rx="1.5"/>
+    <path d="M203 53L211 61M211 53L203 61"/>
+  </g>
+
+  <!-- Window edge -->
+  <rect x="32.75" y="40.75" width="190.5" height="174.5" rx="15.25" stroke="url(#windowEdge)" stroke-width="1.5"/>
+
+  <!-- ===== Controls ===== -->
+  <!-- Sidebar / list panel -->
+  <rect x="46.75" y="90.75" width="44.5" height="108.5" rx="6.25" fill="#E6EAEE" stroke="#D2D9E1" stroke-width="1.5"/>
+  <rect x="53" y="98" width="32" height="10" rx="3" fill="#0D9488"/>
+  <rect x="53" y="115" width="26" height="6" rx="3" fill="#94A3B8"/>
+  <rect x="53" y="128" width="30" height="6" rx="3" fill="#94A3B8"/>
+  <rect x="53" y="141" width="22" height="6" rx="3" fill="#94A3B8"/>
+
+  <!-- Text fields -->
+  <rect x="106.75" y="90.75" width="102.5" height="18.5" rx="4.25" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+  <rect x="113" y="97" width="38" height="6" rx="3" fill="#A8B3C2"/>
+  <rect x="106.75" y="118.75" width="102.5" height="18.5" rx="4.25" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+  <rect x="113" y="125" width="56" height="6" rx="3" fill="#A8B3C2"/>
+
+  <!-- Snapline: left edges of fields + button align -->
+  <path d="M106 82V208" stroke="#0D9488" stroke-width="2" stroke-dasharray="4 3"/>
+  <circle cx="106" cy="82" r="2.25" fill="#0D9488"/>
+  <circle cx="106" cy="208" r="2.25" fill="#0D9488"/>
+
+  <!-- Primary button (selected) -->
+  <g filter="url(#buttonShadow)">
+    <rect x="106" y="156" width="84" height="36" rx="7" fill="url(#button)"/>
+  </g>
+  <rect x="106" y="156" width="84" height="18" rx="7" fill="url(#buttonSheen)"/>
+  <rect x="106.5" y="156.5" width="83" height="35" rx="6.5" stroke="#9A3412" stroke-opacity="0.35" stroke-width="1"/>
+  <rect x="128" y="171" width="40" height="6" rx="3" fill="#FFFFFF" fill-opacity="0.95"/>
+
+  <!-- Selection box -->
+  <rect x="99" y="149" width="98" height="50" rx="2" stroke="#1F242B" stroke-width="2"/>
+
+  <!-- Resize handles -->
+  <g fill="#FFFFFF" stroke="#1F242B" stroke-width="2.5">
+    <rect x="92.5" y="142.5" width="13" height="13" rx="2.5"/>
+    <rect x="141.5" y="142.5" width="13" height="13" rx="2.5"/>
+    <rect x="190.5" y="142.5" width="13" height="13" rx="2.5"/>
+    <rect x="92.5" y="167.5" width="13" height="13" rx="2.5"/>
+    <rect x="190.5" y="167.5" width="13" height="13" rx="2.5"/>
+    <rect x="92.5" y="192.5" width="13" height="13" rx="2.5"/>
+    <rect x="141.5" y="192.5" width="13" height="13" rx="2.5"/>
+    <rect x="190.5" y="192.5" width="13" height="13" rx="2.5"/>
+  </g>
+  </g>
+</svg>

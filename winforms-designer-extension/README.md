@@ -1,141 +1,99 @@
-# Modern WinForms Designer for VS Code
+# Modern WinForms Designer
 
-A powerful Windows Forms visual designer extension for Visual Studio Code. Design your WinForms UI with drag-and-drop ease, right from VS Code!
+A visual Windows Forms designer for VS Code, inspired by Visual Studio 2026.
 
-![Visual Studio Code](https://img.shields.io/badge/VS%20Code-1.80%2B-blue)
-![Platform](https://img.shields.io/badge/platform-Windows-blue)
-![.NET](https://img.shields.io/badge/.NET-6_Windows_Desktop-purple)
-![License](https://img.shields.io/badge/license-MIT-green)
+Design, edit, and preview C# `.Designer.cs` forms directly inside a VS Code editor tab on Windows, macOS, and Linux — no external window and no `.NET` runtime required.
 
-## ✨ Features
+![Modern WinForms Designer showing OrderManagerDemo in Dark Fluent mode](images/hero-designer.png)
 
-- **🎨 Visual Designer**: Drag and drop controls just like in Visual Studio
-- **💾 Designer Code Saving**: Save visual edits back to your `.Designer.cs` file
-- **🌙 Modern Dark UI**: Seamlessly matches VS Code's dark theme
-- **⚙️ Property Grid**: Edit control properties with an intuitive interface
-- **🧰 Toolbox**: Quick access to all common Windows Forms controls
-- **🚀 Context Menu Integration**: Right-click a form's `.cs` or `.Designer.cs` file to open the designer
+## Quick Start
 
-## 📦 Installation
+1. Open any `Form.cs` or `Form.Designer.cs` file in VS Code.
+2. Press **`Shift+F7`**, click the **Open WinForms Designer** icon in the editor title bar, or right-click the file in the Explorer and select **Open WinForms Designer**.
+3. Drag controls from the **Toolbox**, configure properties or wire events in the **Properties** panel, and save with **`Ctrl+S`**.
+4. Press **`F7`** to jump to the code-behind file, or click the split button in the toolbar to view `.Designer.cs` side by side.
 
-### Option 1: Install from VSIX (Recommended)
+To scaffold a new form or user control, right-click a folder in the Explorer and select **New Windows Form...** (choose from Blank Form, OK/Cancel Dialog, Master-Detail Workspace, Settings Window, Sign-In Form, or Dashboard) or **New User Control...**.
 
-1. Download the latest `.vsix` file from the [GitHub Releases](https://github.com/ToTt0G/winforms-designer-vscode/releases) page
-2. Open VS Code
-3. Go to Extensions view (`Ctrl+Shift+X`)
-4. Click the **`...`** menu → **Install from VSIX...**
-5. Select the downloaded `.vsix` file
-6. Reload VS Code when prompted
+## Features
 
-### Option 2: Build from Source
+### Visual Studio-Style Design Surface
 
-```bash
-# Clone the repository
-git clone https://github.com/ToTt0G/winforms-designer-vscode.git
-cd winforms-designer-vscode
+- **Snaplines and grid layout**: Blue alignment/margin/padding snaplines, magenta text-baseline snaplines, configurable grid (`4` / `8` / `12` / `16` px), and `Alt`-drag free placement.
+- **Full container layout solver**: Live rendering and drag-reparenting for `Panel`, `GroupBox`, `TabControl` / `TabPage`, `SplitContainer` (draggable splitter bar + `Panel1` / `Panel2`), `FlowLayoutPanel`, `TableLayoutPanel`, and docked strips (`MenuStrip`, `ToolStrip`, `StatusStrip`).
+- **Anchor and dock propagation**: Resizing a form or container updates anchored children (`Top`, `Bottom`, `Left`, `Right`) and recalculates docked layouts automatically.
+- **Multi-select alignment tools**: Marquee selection, align edges/centers, make same width/height/size, equalize spacing, center in container, lock controls, and Z-order controls.
+- **Smart tags and inline editing**: Context action menus on controls and `F2` inline text editing.
+- **Component tray and Document Outline**: Manage non-visual components (`Timer`, `ImageList`, dialogs, `ToolTip`, `ContextMenuStrip`, etc.) in the bottom tray and inspect or reorder the control hierarchy in the outline.
 
-# Build the Windows designer and copy its runtime files into the extension
-dotnet build SWD4CS/SWD4CS.csproj --configuration Release
+### Property Grid, Collection Editors, and Events Inspector
 
-# Install dependencies
-cd winforms-designer-extension
-npm ci
+![Light theme with Classic WinForms rendering and Events Inspector](images/light-theme-events.png)
 
-# Compile the extension
-npm run compile
+- **Rich property editors**: Categorized and alphabetical views, search filter, multi-select editing, right-click Reset, visual 4-arm **Anchor** picker, 5-zone **Dock** picker, 3×3 **ContentAlignment** picker, 3-tab **Color** picker (Custom / Web / System), **Font** picker, **Control Reference** pickers (`AcceptButton`, `CancelButton`, `MainMenuStrip`, `ContextMenuStrip`, `ImageList`), and `.resx`-backed **Image / Icon** picker.
+- **Collection editors**: Dedicated dialogs for string items, `DataGridView` columns, `ListView` columns, hierarchical `TreeView` nodes, `TabPage` collections, `MenuStrip` / `ToolStrip` / `StatusStrip` items (with "Insert Standard Items"), and `TableLayoutPanel` rows/columns.
+- **Code-behind event wiring**: Double-click a control or bind an event in the Events tab to wire `+=` in `.Designer.cs`, generate the typed handler in `.cs`, and jump straight into the method body.
 
-# Package the extension (optional)
-npx vsce package
-```
+### Visual Tab Order Mode
 
-## 🚀 Usage
+![Visual Tab Order badge overlay](images/tab-order-mode.png)
 
-1. Open a C# Windows Forms file (`Form1.cs` or `Form1.Designer.cs`) in VS Code. Opening `Form1.cs` resolves its sibling `Form1.Designer.cs`; C# files without a matching designer are rejected.
-2. **Right-click** the file in:
-   - **Explorer** sidebar, or
-   - **Editor tab** at the top
-3. Select **"Open WinForms Designer"**
-   
-   *Alternatively*, use the Command Palette (`Ctrl+Shift+P`) and run:
-   ```
-   WinForms: Open WinForms Designer
-   ```
+Toggle **Tab Order** in the toolbar to overlay hierarchical `TabIndex` badges across containers and click controls in focus order.
 
-4. The visual designer will launch in a separate window
-5. Design your form visually and use **File → Save** in the designer to write the `.Designer.cs` file. Unsaved editor changes to the selected form and its designer are saved before launch; cancelling that save cancels launch. External edits made while the designer is open are not synchronized or conflict-checked.
+### Live Interactive Preview and Layout Auditor
 
-## 📋 Requirements
+![Live interactive preview modal with DPI and viewport size presets](images/live-preview.png)
 
-- **Operating System**: Windows (WinForms is Windows-only)
-- **.NET Runtime**: .NET 6 Windows Desktop Runtime (the designer currently targets `net6.0-windows`; a newer major runtime alone is not sufficient)
-- **Building from source**: a .NET SDK capable of building `net6.0-windows`, plus Node.js/npm
-- **VS Code**: Version 1.80.0 or higher
+- **Interactive Preview**: Test typing, tab switching, splitter dragging, and window resizing across **100% / 125% / 150% DPI** and **Design / Compact / Wide** presets without compiling.
+- **Fluent and Classic rendering**: Toggle between Windows 11 Fluent-styled controls and Classic WinForms chrome while following your VS Code Dark, Light, or High Contrast theme.
+- **Live Layout & Accessibility Audit**: Flags overlapping controls, out-of-bounds controls, duplicate `TabIndex` values, missing dialog `AcceptButton`/`CancelButton`, missing accessible text, and invalid `NumericUpDown` / `ProgressBar` / `SplitContainer` ranges.
 
-## 🛠️ Development
+## Supported Controls
 
-### Project Structure
+59 built-in WinForms types across Common Controls, Containers, Menus & Toolbars, Data, Components, Dialogs & Printing, plus safe placeholder rendering for custom and third-party controls.
 
-```
-winforms-designer-extension/
-├── src/
-│   └── extension.ts       # VS Code extension entry point
-├── bin/
-│   └── SWD4CS.exe        # Bundled WinForms designer executable
-├── out/                   # Compiled TypeScript output
-├── package.json          # Extension manifest
-└── tsconfig.json         # TypeScript configuration
-```
+## Keyboard Shortcuts
 
-### Running in Development Mode
+Press **`?`** while the design canvas has focus to view the built-in shortcuts reference.
 
-1. Open the project folder in VS Code
-2. Press **F5** to launch the Extension Development Host
-3. Test the extension in the new window
+| Action | Shortcut |
+| --- | --- |
+| Open designer from `.cs` / `.Designer.cs` | `Shift+F7` |
+| Jump to code-behind from designer | `F7` |
+| Focus Properties / Toolbox search | `F4` / `Ctrl+Shift+T` (`Ctrl+F6`) |
+| Nudge by grid size / 1 px | `Arrow` / `Ctrl+Arrow` |
+| Resize by grid size / 1 px | `Shift+Arrow` / `Ctrl+Shift+Arrow` |
+| Ignore snaplines & grid while dragging | `Alt+Drag` |
+| Edit control text in place | `F2` |
+| Go to default event handler | `Enter` or double-click |
+| Duplicate / Copy / Cut / Paste / Delete | `Ctrl+D` / `Ctrl+C` / `Ctrl+X` / `Ctrl+V` / `Del` |
+| Undo / Redo | `Ctrl+Z` / `Ctrl+Y` (`Ctrl+Shift+Z`) |
+| Zoom in / out / reset | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
 
-### Building the VSIX Package
+## Settings
 
-```bash
-# From the repository root, rebuild the executable before packaging:
-dotnet build SWD4CS/SWD4CS.csproj --configuration Release
-cd winforms-designer-extension
-npm ci
-npm run compile
-npx @vscode/vsce package
-```
+| Setting | Default | Description |
+| --- | --- | --- |
+| `winformsDesigner.gridSize` | `8` | Snap grid spacing in pixels (`4`, `8`, `12`, `16`). |
+| `winformsDesigner.layoutMode` | `"snaplines"` | Default alignment mode (`"snaplines"` or `"grid"`). |
+| `winformsDesigner.showGrid` | `true` | Show the alignment dot grid on the design surface. |
+| `winformsDesigner.renderStyle` | `"fluent"` | Control preview style (`"fluent"` or `"classic"`). |
+| `winformsDesigner.codeStyle.useThisQualifier` | `"auto"` | Prefix control references with `this.` (`"auto"`, `"always"`, `"never"`). |
+| `winformsDesigner.codeStyle.eventHandlerStyle` | `"auto"` | Event wiring syntax (`"auto"`, `"shorthand"`, `"explicitDelegate"`). |
 
-### Regression checks (Windows)
+## Surgical `.Designer.cs` Round-Tripping
 
-```bash
-dotnet run --project Tests/RegressionTests/RegressionTests.csproj --configuration Release
-npm --prefix winforms-designer-extension test
-```
+- Supports both `.NET Framework 4.x` and `.NET 6`–`.NET 10` styles (block-scoped and file-scoped namespaces, nullable annotations, target-typed `new()`, shorthand or explicit delegate event wiring).
+- Preserves custom comments, helper methods, `Dispose(bool)`, local `DataGridViewCellStyle` declarations, `ComponentResourceManager` / `ApplyResources` calls, custom control types, and unrecognized property expressions.
+- Automatically opens in **read-only mode** when a file contains conditional compilation (`#if` / `#endif`) inside `InitializeComponent()` or lacks a standard `InitializeComponent()` block.
 
-## ⚠️ Known Limitations
+## Requirements
 
-### Resource-based Properties
-The following properties require `.resx` resource file support and are not currently supported:
-- **Icon**: Form icons cannot be saved/loaded (requires .resx implementation)
-- **Images**: Image resources for PictureBox and other controls
-- **Localized strings**: Resource-based string localization
+- **VS Code** `1.85.0` or newer
+- **OS**: Windows, macOS, or Linux (no external `.NET` runtime required to edit forms)
 
-These properties may be visible in the property grid but changes will not persist to the `.Designer.cs` file.
+## Links
 
-**Workaround**: Manually edit the `.Designer.cs` file and create corresponding `.resx` files using Visual Studio or other tools.
-
-## 🙏 Credits
-
-This extension wraps the excellent [SWD4CS](https://github.com/hry2566/SWD4CS) designer by **hry2566**, making it accessible directly from VS Code.
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details
-
-## 🐛 Issues & Contributions
-
-Found a bug or have a feature request? Please [open an issue](../../issues)!
-
-Pull requests are welcome. For major changes, please open an issue first to discuss what you'd like to change.
-
----
-
-**Enjoy designing WinForms in VS Code!** 🎉
+- [Source Repository & Issue Tracker](https://github.com/ToTt0G/winforms-designer-vscode)
+- [Changelog](CHANGELOG.md)
+- [License (MIT)](LICENSE)

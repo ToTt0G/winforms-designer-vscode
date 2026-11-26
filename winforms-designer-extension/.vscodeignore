@@ -1,5 +1,13 @@
+.vscode/**
+.vscode-test/**
 src/**
 test/**
-tsconfig.json
+out-test/**
+tsconfig*.json
+esbuild.mjs
 **/*.map
-bin/**/*.pdb
+**/*.ts
+!dist/**
+images/*.svg
+*.vsix
+node_modules/**

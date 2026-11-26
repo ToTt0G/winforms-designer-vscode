@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.webview.json",
+  "compilerOptions": {
+    "jsx": "react-jsx"
+  },
+  "include": ["./**/*.ts", "./**/*.tsx", "../shared/**/*.ts"]
+}

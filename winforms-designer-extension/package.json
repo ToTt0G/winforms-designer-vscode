@@ -1,33 +1,125 @@
 {
   "name": "winforms-designer-modern",
   "displayName": "Modern WinForms Designer",
-  "description": "A visual Windows Forms designer for VS Code, inspired by Visual Studio 2026.",
-  "version": "0.0.4",
-  "engines": {
-    "vscode": "^1.80.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/ToTt0G/winforms-designer-vscode.git"
-  },
+  "description": "A visual Windows Forms designer inside VS Code, inspired by Visual Studio 2026.",
+  "version": "1.0.0",
   "publisher": "ToTt0G",
   "author": {
     "name": "ToTt0G"
   },
   "license": "MIT",
-  "main": "./out/extension.js",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#181A20",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "winforms",
+    "windows forms",
+    "visual designer",
+    "form designer",
+    "gui designer",
+    "csharp",
+    "c#",
+    "dotnet",
+    ".net",
+    "designer.cs",
+    "visual studio"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ToTt0G/winforms-designer-vscode.git",
+    "directory": "winforms-designer-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/ToTt0G/winforms-designer-vscode/issues"
+  },
+  "homepage": "https://github.com/ToTt0G/winforms-designer-vscode#readme",
+  "qna": "marketplace",
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCustomEditor:winformsDesigner.editor",
+    "onCommand:winforms.openDesigner",
+    "onCommand:winforms.newForm",
+    "onCommand:winforms.newUserControl",
+    "onCommand:winforms.viewCode",
+    "onCommand:winforms.viewDesignerCode"
+  ],
   "contributes": {
+    "customEditors": [
+      {
+        "viewType": "winformsDesigner.editor",
+        "displayName": "WinForms Visual Designer",
+        "selector": [
+          {
+            "filenamePattern": "*.Designer.cs"
+          },
+          {
+            "filenamePattern": "*.designer.cs"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
     "commands": [
       {
         "command": "winforms.openDesigner",
-        "title": "Open WinForms Designer"
+        "title": "Open WinForms Designer",
+        "category": "WinForms",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "winforms.viewCode",
+        "title": "View Form Code",
+        "category": "WinForms",
+        "icon": "$(code)"
+      },
+      {
+        "command": "winforms.viewDesignerCode",
+        "title": "View Designer Code Side by Side",
+        "category": "WinForms",
+        "icon": "$(split-horizontal)"
+      },
+      {
+        "command": "winforms.newForm",
+        "title": "New Windows Form...",
+        "category": "WinForms",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "winforms.newUserControl",
+        "title": "New User Control...",
+        "category": "WinForms",
+        "icon": "$(symbol-class)"
       }
     ],
     "menus": {
       "editor/title": [
+        {
+          "command": "winforms.openDesigner",
+          "when": "resourceExtname == .cs && activeCustomEditorId != winformsDesigner.editor",
+          "group": "navigation"
+        },
+        {
+          "command": "winforms.viewCode",
+          "when": "activeCustomEditorId == winformsDesigner.editor",
+          "group": "navigation@1"
+        },
+        {
+          "command": "winforms.viewDesignerCode",
+          "when": "activeCustomEditorId == winformsDesigner.editor",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/title/context": [
         {
           "command": "winforms.openDesigner",
           "when": "resourceExtname == .cs",
@@ -38,21 +130,103 @@
         {
           "command": "winforms.openDesigner",
           "when": "resourceExtname == .cs",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "winforms.newForm",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@2"
+        },
+        {
+          "command": "winforms.newUserControl",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@3"
         }
       ]
+    },
+    "keybindings": [
+      {
+        "command": "winforms.openDesigner",
+        "key": "shift+f7",
+        "when": "editorTextFocus && resourceExtname == .cs"
+      },
+      {
+        "command": "winforms.viewCode",
+        "key": "f7",
+        "when": "activeCustomEditorId == winformsDesigner.editor"
+      }
+    ],
+    "configuration": {
+      "title": "Modern WinForms Designer",
+      "properties": {
+        "winformsDesigner.gridSize": {
+          "type": "number",
+          "default": 8,
+          "enum": [4, 8, 12, 16],
+          "description": "Snap grid spacing in pixels when moving or resizing controls."
+        },
+        "winformsDesigner.layoutMode": {
+          "type": "string",
+          "default": "snaplines",
+          "enum": ["snaplines", "grid"],
+          "enumDescriptions": [
+            "Show Visual Studio-style alignment and spacing snaplines.",
+            "Snap control positions and sizes strictly to the grid."
+          ],
+          "description": "Default layout alignment mode on the design canvas."
+        },
+        "winformsDesigner.showGrid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Display the alignment dot grid on the form design surface."
+        },
+        "winformsDesigner.renderStyle": {
+          "type": "string",
+          "default": "fluent",
+          "enum": ["fluent", "classic"],
+          "enumDescriptions": [
+            "Windows 11 Fluent-inspired control rendering.",
+            "Classic Windows Forms control rendering."
+          ],
+          "description": "Visual rendering style used for controls on the design surface."
+        },
+        "winformsDesigner.codeStyle.useThisQualifier": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "always", "never"],
+          "description": "Whether generated InitializeComponent() statements prefix control references with 'this.' ('auto' matches the existing file)."
+        },
+        "winformsDesigner.codeStyle.eventHandlerStyle": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "shorthand", "explicitDelegate"],
+          "description": "How event subscriptions are emitted in .Designer.cs ('auto' matches the existing file)."
+        }
+      }
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run build:designer && npm run compile",
-    "build:designer": "dotnet build ../SWD4CS/SWD4CS.csproj --configuration Release",
-    "compile": "tsc -p ./",
-    "test": "npm run compile && node --test test/*.test.js",
-    "watch": "tsc -watch -p ./"
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.mjs --production",
+    "build:dev": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
+    "test:unit": "node esbuild.mjs --tests && node --test out-test/**/*.test.js",
+    "test:e2e": "node test/e2e/designer.e2e.mjs",
+    "test": "npm run typecheck && npm run build && npm run test:unit",
+    "package": "npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/ToTt0G/winforms-designer-vscode/blob/main/winforms-designer-extension --baseImagesUrl https://raw.githubusercontent.com/ToTt0G/winforms-designer-vscode/main/winforms-designer-extension"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@types/vscode": "^1.80.0",
-    "@types/node": "^16.x",
-    "typescript": "^5.0.0"
+    "@types/node": "^20.17.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.2"
   }
 }
