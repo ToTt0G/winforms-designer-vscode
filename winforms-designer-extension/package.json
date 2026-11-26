@@ -211,7 +211,7 @@
     "build:dev": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
-    "test:unit": "node esbuild.mjs --tests && node --test out-test/**/*.test.js",
+    "test:unit": "node esbuild.mjs --tests && node --test \"out-test/**/*.test.js\"",
     "test:e2e": "node test/e2e/designer.e2e.mjs",
     "test": "npm run typecheck && npm run build && npm run test:unit",
     "package": "npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/ToTt0G/winforms-designer-vscode/blob/main/winforms-designer-extension --baseImagesUrl https://raw.githubusercontent.com/ToTt0G/winforms-designer-vscode/main/winforms-designer-extension"
