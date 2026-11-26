@@ -111,12 +111,13 @@ const CS_FILE_RE = /^(.+)\.cs$/i;
  */
 function findSiblingFile(directory: string, expectedFileName: string): string {
   const exactPath = path.join(directory, expectedFileName);
-  if (fs.existsSync(exactPath)) {
-    return exactPath;
-  }
 
   try {
     const entries = fs.readdirSync(directory);
+    // Prefer exact-case match first, then preserve actual on-disk casing on case-insensitive FS (Windows/macOS).
+    if (entries.includes(expectedFileName)) {
+      return exactPath;
+    }
     const lowerExpected = expectedFileName.toLowerCase();
     for (const entry of entries) {
       if (entry.toLowerCase() === lowerExpected) {

@@ -59,7 +59,7 @@ describe('codeBehind (parseCodeBehind & ensureEventHandlerInCodeBehind)', () => 
       )
     );
     // Verify cursor line/column points inside method body
-    const lines = res.updatedSource.split('\n');
+    const lines = res.updatedSource.split(/\r?\n/);
     assert.equal(lines[res.line - 2].trim(), '{');
     assert.equal(lines[res.line - 1], '        ');
     assert.equal(res.column, 9);
