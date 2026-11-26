@@ -5,6 +5,7 @@
 import { getControlDefinition, getEventSignature, WINFORMS_ENUMS } from '../shared/catalog';
 import type {
   ColorValue,
+  DataBindingEntry,
   DataGridViewColumnNode,
   DesignDocument,
   DesignNode,
@@ -38,7 +39,7 @@ import {
   isSizeValue,
 } from '../shared/model';
 import { splitStatements, tokenizeCSharp } from './lexer';
-import { doesRawExpressionMatchValue } from './parser';
+import { doesRawDataBindingMatchEntry, doesRawExpressionMatchValue } from './parser';
 import { encodeCSharpString } from './stringLiteral';
 
 const DECIMAL_PROPERTIES = new Set<string>(['Value', 'Minimum', 'Maximum', 'Increment']);
@@ -188,8 +189,11 @@ export function generateDesignerCs(doc: DesignDocument, options?: GenerateOption
   const fieldIndent = methodIndent;
 
   // Collect all flattened fields & nodes in deterministic pre-order (throws on duplicate names)
-  const allFields = collectAllFields(doc);
-  const allValidNames = new Set<string>(allFields.map((f) => f.name));
+  const { fields: allFields, inheritedNames } = collectAllFields(doc);
+  const allValidNames = new Set<string>([
+    ...allFields.map((f) => f.name),
+    ...inheritedNames,
+  ]);
   allValidNames.add(doc.form.name);
   allValidNames.add(doc.className);
 
@@ -515,7 +519,8 @@ function buildInitializeComponentMethod(
   }
 
   // 3. BeginInit() / SuspendLayout()
-  const allNodesForInit = [...visualNodesPreOrder, ...doc.components];
+  const ownComponents = doc.components.filter((c) => !c.inherited);
+  const allNodesForInit = [...visualNodesPreOrder, ...ownComponents];
   const emitSuspendResume = doc.metadata.hasSuspendResumeLayout !== false;
 
   if (emitSuspendResume) {
@@ -563,7 +568,7 @@ function buildInitializeComponentMethod(
   }
 
   // 6. Component configuration blocks
-  for (const comp of doc.components) {
+  for (const comp of ownComponents) {
     emitNodeConfigBlock(comp, ctx, lines);
   }
 
@@ -609,7 +614,7 @@ function buildInitializeComponentMethod(
       }
     }
     lines.push(`${bodyIndent}${prefix}ResumeLayout(false);`);
-    if (doc.form.children.length > 0) {
+    if (doc.form.children.some((c) => !c.inherited)) {
       lines.push(`${bodyIndent}${prefix}PerformLayout();`);
     }
   } else {
@@ -659,6 +664,7 @@ function emitNodeConfigBlock(node: DesignNode, ctx: EmitContext, lines: string[]
       }
     }
     for (const child of node.children) {
+      if (child.inherited) continue;
       const hasExplicitCell =
         child.tableCell?.explicit !== false &&
         child.tableCell?.column !== undefined &&
@@ -697,12 +703,14 @@ function emitNodeConfigBlock(node: DesignNode, ctx: EmitContext, lines: string[]
   } else if (node.type === 'SplitContainer') {
     // Emit Panel1/Panel2 controls cleanly
     for (const child of node.children) {
+      if (child.inherited) continue;
       const slot = child.panelSlot === 'Panel2' ? 'Panel2' : 'Panel1';
       lines.push(`${bodyIndent}${target}.${slot}.Controls.Add(${prefix}${child.name});`);
     }
   } else if (node.children.length > 0) {
     // Panel, GroupBox, TabControl, TabPage, FlowLayoutPanel, custom containers
     for (const child of node.children) {
+      if (child.inherited) continue;
       lines.push(`${bodyIndent}${target}.Controls.Add(${prefix}${child.name});`);
     }
   }
@@ -769,6 +777,11 @@ function emitNodeConfigBlock(node: DesignNode, ctx: EmitContext, lines: string[]
       indent,
       lines
     );
+  }
+
+  // DataBindings
+  if (node.dataBindings && node.dataBindings.length > 0) {
+    emitDataBindings(target, node.dataBindings, ctx, lines);
   }
 
   // Properties (alphabetical)
@@ -949,11 +962,20 @@ function emitFormConfigBlock(doc: DesignDocument, ctx: EmitContext, lines: strin
     if (controlsEmitted) return;
     controlsEmitted = true;
     for (const child of form.children) {
+      if (child.inherited) continue;
       lines.push(`${bodyIndent}${prefix}Controls.Add(${prefix}${child.name});`);
     }
   };
 
   for (const key of propKeys) {
+    if (key === 'Localizable') continue;
+    if (
+      form.inheritedDefaultProperties &&
+      Object.prototype.hasOwnProperty.call(form.inheritedDefaultProperties, key) &&
+      JSON.stringify(form.properties[key]) === JSON.stringify(form.inheritedDefaultProperties[key])
+    ) {
+      continue;
+    }
     if (preferClientSize && key === 'Size' && isSizeValue(form.properties.Size)) continue;
     // Emit Controls.Add right in alphabetical order (after ClientSize, before Name/Text)
     if (!controlsEmitted && key > 'Controls') {
@@ -970,6 +992,10 @@ function emitFormConfigBlock(doc: DesignDocument, ctx: EmitContext, lines: strin
     );
   }
   emitControls();
+
+  if (form.dataBindings && form.dataBindings.length > 0) {
+    emitDataBindings(prefix.slice(0, -1), form.dataBindings, ctx, lines);
+  }
 
   for (const sub of reconcileEventSubscriptions(form.events, form.eventSubscriptions)) {
     emitEventSubscription(prefix.slice(0, -1), form.type, sub, ctx, lines);
@@ -1000,6 +1026,45 @@ function emitAddRange(
   }
 }
 
+function emitDataBindings(
+  target: string,
+  bindings: DataBindingEntry[],
+  ctx: EmitContext,
+  lines: string[]
+): void {
+  const lhs = target ? `${target}.DataBindings.Add` : 'DataBindings.Add';
+  for (const entry of bindings) {
+    if (
+      entry.rawExpression &&
+      doesRawDataBindingMatchEntry(entry.rawExpression, entry)
+    ) {
+      lines.push(`${ctx.bodyIndent}${lhs}(${entry.rawExpression.trim()});`);
+      continue;
+    }
+
+    const propLit = encodeCSharpString(entry.propertyName);
+    const trimmedDs = entry.dataSource.trim();
+    const isSimpleIdent =
+      /^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedDs) && trimmedDs !== 'this' && trimmedDs !== 'null';
+    const dsExpr =
+      isSimpleIdent && entry.sourceQualifier !== 'none'
+        ? `${ctx.prefix}${trimmedDs}`
+        : trimmedDs;
+    const memberLit = encodeCSharpString(entry.dataMember);
+    const extraSuffix = entry.extraArgs?.trim() ? `, ${entry.extraArgs.trim()}` : '';
+    const fmtSuffix = extraSuffix
+      ? `, ${entry.formattingEnabled === true ? 'true' : 'false'}${extraSuffix}`
+      : entry.formattingEnabled === true
+        ? ', true'
+        : entry.formattingEnabled === false
+          ? ', false'
+          : '';
+    lines.push(
+      `${ctx.bodyIndent}${lhs}(new System.Windows.Forms.Binding(${propLit}, ${dsExpr}, ${memberLit}${fmtSuffix}));`
+    );
+  }
+}
+
 function emitPropertyAssignment(
   target: string,
   propName: string,
@@ -1009,6 +1074,10 @@ function emitPropertyAssignment(
   lines: string[],
   rawPropertyExpressions?: Record<string, string>
 ): void {
+  // Localizable is a design-time-only WinForms designer property and NOT a runtime Form/Control property
+  if (propName === 'Localizable') {
+    return;
+  }
   if (isDanglingControlRefProperty(propName, value, ctx.allValidNames, ctx.existingFields)) {
     return;
   }
@@ -1330,6 +1399,7 @@ function collectVisualNodesPreOrder(children: DesignNode[]): DesignNode[] {
   const result: DesignNode[] = [];
   const visit = (nodes: DesignNode[]) => {
     for (const n of nodes) {
+      if (n.inherited) continue;
       result.push(n);
       if (n.children.length > 0) {
         visit(n.children);
@@ -1346,13 +1416,55 @@ function extractShortTypeName(typeName: string): string {
   return dotIdx >= 0 ? cleaned.slice(dotIdx + 1) : cleaned;
 }
 
-function collectAllFields(doc: DesignDocument): FlattenedField[] {
+function collectAllFields(doc: DesignDocument): {
+  fields: FlattenedField[];
+  inheritedNames: Set<string>;
+} {
   const fields: FlattenedField[] = [];
   const seenNames = new Set<string>();
+  const inheritedNames = new Set<string>();
   const existing = doc.metadata.existingFieldDeclarations;
 
+  const recordInheritedNames = (node: DesignNode): void => {
+    inheritedNames.add(node.name);
+    const recordStrip = (items: StripItemNode[] | undefined) => {
+      if (!items) return;
+      for (const item of items) {
+        inheritedNames.add(item.name);
+        recordStrip(item.dropDownItems);
+      }
+    };
+    recordStrip(node.stripItems);
+    if (node.columns) {
+      for (const col of node.columns) inheritedNames.add(col.name);
+    }
+    if (node.listViewColumns) {
+      for (const col of node.listViewColumns) inheritedNames.add(col.name);
+    }
+    for (const child of node.children) {
+      recordInheritedNames(child);
+    }
+  };
+
+  // First pass: register all inherited names so derived controls cannot collide with them
+  const scanForInherited = (nodes: DesignNode[]): void => {
+    for (const n of nodes) {
+      if (n.inherited) {
+        recordInheritedNames(n);
+      } else {
+        scanForInherited(n.children);
+      }
+    }
+  };
+  scanForInherited(doc.form.children);
+  for (const comp of doc.components) {
+    if (comp.inherited) {
+      recordInheritedNames(comp);
+    }
+  }
+
   const pushField = (field: FlattenedField): void => {
-    if (seenNames.has(field.name)) {
+    if (seenNames.has(field.name) || inheritedNames.has(field.name)) {
       throw new Error(`Duplicate control/field name detected: "${field.name}"`);
     }
     seenNames.add(field.name);
@@ -1376,6 +1488,7 @@ function collectAllFields(doc: DesignDocument): FlattenedField[] {
   };
 
   const pushNode = (node: DesignNode) => {
+    if (node.inherited) return;
     const def = getControlDefinition(node.type);
     const ex = existing[node.name];
     const instantiationType =
@@ -1455,7 +1568,7 @@ function collectAllFields(doc: DesignDocument): FlattenedField[] {
     pushNode(comp);
   }
 
-  return fields;
+  return { fields, inheritedNames };
 }
 
 function resolveConstructorArgs(args: string | undefined, prefix: string): string {
@@ -1512,6 +1625,7 @@ function hasAnyResourceValue(doc: DesignDocument): boolean {
   };
 
   const checkNode = (node: DesignNode): boolean => {
+    if (node.inherited) return false;
     if (checkProps(node.properties)) return true;
     if (checkStripItems(node.stripItems)) return true;
     if (node.columns?.some((c) => c.properties && checkProps(c.properties))) return true;
@@ -1536,11 +1650,15 @@ function anyRawReferencesResources(doc: DesignDocument): boolean {
     return items.some((it) => checkRaw(it.rawStatements) || checkStripItems(it.dropDownItems));
   };
 
-  const checkNode = (node: DesignNode): boolean =>
-    checkRaw(node.rawStatements) ||
-    checkStripItems(node.stripItems) ||
-    Boolean(node.listViewColumns?.some((c) => checkRaw(c.rawStatements))) ||
-    node.children.some(checkNode);
+  const checkNode = (node: DesignNode): boolean => {
+    if (node.inherited) return false;
+    return (
+      checkRaw(node.rawStatements) ||
+      checkStripItems(node.stripItems) ||
+      Boolean(node.listViewColumns?.some((c) => checkRaw(c.rawStatements))) ||
+      node.children.some(checkNode)
+    );
+  };
 
   return checkNode(doc.form) || doc.components.some(checkNode);
 }

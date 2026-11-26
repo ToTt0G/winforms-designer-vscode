@@ -1,8 +1,8 @@
 // Modal collection editors: Items, DataGridView Columns, TabPages, Strip Items,
-// TableLayoutPanel Rows & Columns, TreeView Nodes and ListView Columns.
+// TableLayoutPanel Rows & Columns, TreeView Nodes, ListView Columns and DataBindings.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { DataGridViewColumnNode, DesignDocument, DesignNode, ListViewColumnNode, StripItemNode, TableTrackStyle, TreeNodeItem } from '../../shared/model';
+import type { DataBindingEntry, DataGridViewColumnNode, DesignDocument, DesignNode, ListViewColumnNode, StripItemNode, TableTrackStyle, TreeNodeItem } from '../../shared/model';
 import {
   collectNames,
   createTabPage,
@@ -890,6 +890,159 @@ function ListViewColumnsEditor({ node, store, onClose }: { node: DesignNode; sto
   );
 }
 
+// ---------------------------------------------------------------------------
+
+const BINDABLE_PROPERTIES = ['Text', 'Checked', 'Value', 'Visible', 'Enabled', 'BackColor', 'ForeColor', 'Image', 'SelectedValue', 'DataSource'];
+const DATA_SOURCE_TYPES = new Set(['BindingSource', 'DataSet', 'DataTable', 'DataView']);
+
+function DataBindingsEditor({ node, store, onClose }: { node: DesignNode; store: DesignerStore; onClose: () => void }) {
+  const doc = store.getState().doc!;
+  const [list, setList] = useState<DataBindingEntry[]>(() => (node.dataBindings ?? []).map((b) => ({ ...b })));
+  const [sel, setSel] = useState(0);
+  const cur = list[sel];
+  const sources = useMemo(() => {
+    const comps = [...doc.components].sort((a, b) => Number(DATA_SOURCE_TYPES.has(b.type)) - Number(DATA_SOURCE_TYPES.has(a.type)) || a.name.localeCompare(b.name));
+    return comps.map((c) => ({ value: (doc.metadata?.useThisQualifier ? 'this.' : '') + c.name, label: `${c.name} (${c.type})` }));
+  }, [doc]);
+  const dupes = new Set(list.map((b) => b.propertyName).filter((p, i, a) => p && a.indexOf(p) !== i));
+  const error = list.some((b) => !b.propertyName.trim())
+    ? 'Every binding needs a property name.'
+    : list.some((b) => !b.dataSource.trim())
+      ? 'Every binding needs a data source.'
+      : dupes.size
+        ? `Property "${[...dupes][0]}" is bound more than once.`
+        : null;
+  const patch = (p: Partial<DataBindingEntry>) =>
+    setList(
+      list.map((b, i) => {
+        if (i !== sel) return b;
+        const next = { ...b, ...p };
+        if ('dataSource' in p && typeof p.dataSource === 'string') {
+          const ds = p.dataSource.trim();
+          if (/^this\.[A-Za-z_][A-Za-z0-9_]*$/.test(ds)) {
+            next.sourceQualifier = 'this';
+          } else if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(ds)) {
+            const isKnownComp = doc.components.some((c) => c.name === ds);
+            if (!isKnownComp && b.sourceQualifier === 'none') {
+              next.sourceQualifier = 'none';
+            } else {
+              delete next.sourceQualifier;
+            }
+          } else {
+            delete next.sourceQualifier;
+          }
+        }
+        // A hand-edited binding no longer matches its preserved C# statement.
+        delete next.rawExpression;
+        return next;
+      })
+    );
+  const listId = `wd-db-props-${node.id}`;
+  const srcId = `wd-db-src-${node.id}`;
+  return (
+    <Modal
+      wide
+      title="Control DataBindings"
+      subtitle={`${node.name}.DataBindings`}
+      okDisabled={!!error}
+      onCancel={onClose}
+      onOk={() => {
+        const cleaned = list.map((b) => ({ ...b, propertyName: b.propertyName.trim(), dataSource: b.dataSource.trim(), dataMember: b.dataMember.trim() }));
+        store.updateNode(
+          node.id,
+          (n) => {
+            const out = { ...n };
+            if (cleaned.length) out.dataBindings = cleaned;
+            else delete out.dataBindings;
+            return out;
+          },
+          `Edit ${node.name}.DataBindings`
+        );
+        onClose();
+      }}
+    >
+      <div className="wd-split-editor" data-testid="databindings-editor">
+        <div className="wd-se-list">
+          <ListToolbar
+            onAdd={() => {
+              const used = new Set(list.map((b) => b.propertyName));
+              const propertyName = BINDABLE_PROPERTIES.find((p) => !used.has(p)) ?? '';
+              const dataSource = sources.find((s) => s.label.includes('(BindingSource)'))?.value ?? sources[0]?.value ?? '';
+              setList([...list, { propertyName, dataSource, dataMember: '', formattingEnabled: true }]);
+              setSel(list.length);
+            }}
+            onRemove={() => {
+              setList(list.filter((_, i) => i !== sel));
+              setSel(Math.max(0, sel - 1));
+            }}
+            onUp={() => {
+              setList(move(list, sel, -1));
+              setSel(Math.max(0, sel - 1));
+            }}
+            onDown={() => {
+              setList(move(list, sel, 1));
+              setSel(Math.min(list.length - 1, sel + 1));
+            }}
+            canRemove={!!cur}
+            canUp={sel > 0}
+            canDown={sel < list.length - 1}
+          />
+          <ul className="wd-se-items" role="listbox" aria-label="Bindings">
+            {list.map((b, i) => (
+              <li key={i} role="option" aria-selected={i === sel} className={i === sel ? 'on' : ''} onClick={() => setSel(i)} data-testid="databinding-row">
+                <Icon name="link" size={14} />
+                <span>{b.propertyName || '(property)'}</span>
+                <em>
+                  {(b.dataSource || '?').replace(/^this\./, '')}
+                  {b.dataMember ? `.${b.dataMember}` : ''}
+                </em>
+              </li>
+            ))}
+            {list.length === 0 ? <li className="wd-empty">No bindings. Add one to connect a property to a data source.</li> : null}
+          </ul>
+        </div>
+        <div className="wd-se-detail">
+          {cur ? (
+            <>
+              <Field label="Property">
+                <input className="wd-pg-input" list={listId} value={cur.propertyName} onChange={(e) => patch({ propertyName: e.target.value })} data-testid="databinding-property" />
+                <datalist id={listId}>
+                  {BINDABLE_PROPERTIES.map((p) => (
+                    <option key={p} value={p} />
+                  ))}
+                </datalist>
+              </Field>
+              <Field label="Data source">
+                <input className="wd-pg-input mono" list={srcId} value={cur.dataSource} placeholder="bindingSource1" onChange={(e) => patch({ dataSource: e.target.value })} data-testid="databinding-source" />
+                <datalist id={srcId}>
+                  {sources.map((s) => (
+                    <option key={s.value} value={s.value} label={s.label} />
+                  ))}
+                </datalist>
+              </Field>
+              <Field label="Data member">
+                <input className="wd-pg-input mono" value={cur.dataMember} placeholder="CustomerName" onChange={(e) => patch({ dataMember: e.target.value })} data-testid="databinding-member" />
+              </Field>
+              <Field label="Formatting enabled">
+                <input type="checkbox" checked={cur.formattingEnabled !== false} onChange={(e) => patch({ formattingEnabled: e.target.checked })} />
+              </Field>
+              <p className="wd-modal-meta">
+                <code>
+                  this.{node.name}.DataBindings.Add(new System.Windows.Forms.Binding("{cur.propertyName}", {cur.dataSource || '…'}, "{cur.dataMember}", {cur.formattingEnabled !== false ? 'true' : 'false'}));
+                </code>
+              </p>
+              {!sources.length ? <p className="wd-modal-meta">Tip: add a BindingSource from the Toolbox to pick it here, or type any data source expression.</p> : null}
+            </>
+          ) : (
+            <p className="wd-empty">Select a binding to edit it.</p>
+          )}
+          {error && list.length ? <p className="wd-error">{error}</p> : null}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function CollectionEditorHost({ editor, store }: { editor: { kind: CollectionEditorKind; nodeId: string } | null; store: DesignerStore }) {
   if (!editor) return null;
   const node = getNode(store.getState().doc!, editor.nodeId);
@@ -910,5 +1063,7 @@ export function CollectionEditorHost({ editor, store }: { editor: { kind: Collec
       return <TreeNodesEditor node={node} store={store} onClose={close} />;
     case 'listViewColumns':
       return <ListViewColumnsEditor node={node} store={store} onClose={close} />;
+    case 'dataBindings':
+      return <DataBindingsEditor node={node} store={store} onClose={close} />;
   }
 }

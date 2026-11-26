@@ -9,6 +9,15 @@ import type {
 
 export type ThemeKind = 'dark' | 'light' | 'high-contrast';
 
+/** Shared BCP-47 culture tag validator used by both the extension host and webview. */
+export const CULTURE_TAG_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
+
+export function isValidCultureTag(tag: string): boolean {
+  if (!tag) return false;
+  if (tag.toLowerCase() === 'default') return false;
+  return CULTURE_TAG_RE.test(tag);
+}
+
 export type HostToWebviewMessage =
   | {
       type: 'init';
@@ -21,6 +30,10 @@ export type HostToWebviewMessage =
       codeBehindHandlers: CodeBehindMethod[];
       themeKind: ThemeKind;
       resourceDataUris: Record<string, string>;
+      hasProject?: boolean;
+      availableCultures?: string[];
+      activeCulture?: string;
+      cultureStrings?: Record<string, string>;
     }
   | {
       type: 'documentUpdated';
@@ -30,6 +43,9 @@ export type HostToWebviewMessage =
       resourceDataUris: Record<string, string>;
       source: 'external' | 'host';
       reason?: 'external' | 'undo' | 'redo' | 'conflict' | 'rejected';
+      availableCultures?: string[];
+      activeCulture?: string;
+      cultureStrings?: Record<string, string>;
     }
   | {
       type: 'applyAck';
@@ -78,6 +94,12 @@ export type HostToWebviewMessage =
   | {
       type: 'showStarPrompt';
       repoUrl: string;
+    }
+  | {
+      type: 'cultureChanged';
+      activeCulture: string;
+      availableCultures: string[];
+      cultureStrings: Record<string, string>;
     };
 
 export type WebviewToHostMessage =
@@ -133,4 +155,22 @@ export type WebviewToHostMessage =
   | {
       type: 'starPromptAction';
       action: 'star' | 'later' | 'dismiss';
+    }
+  | {
+      type: 'switchCulture';
+      culture: string;
+    }
+  | {
+      type: 'addCulture';
+      culture: string;
+    }
+  | {
+      type: 'setCultureValue';
+      culture: string;
+      key: string;
+      value: string;
+    }
+  | {
+      type: 'runProjectAction';
+      action: 'build' | 'run';
     };

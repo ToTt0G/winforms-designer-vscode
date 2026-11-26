@@ -20,7 +20,8 @@ export type AuditRuleCode =
   | 'missing-accessible-text'
   | 'numeric-updown-range'
   | 'progress-bar-range'
-  | 'split-container-distance';
+  | 'split-container-distance'
+  | 'high-dpi-autoscale-none';
 
 export interface DesignAuditIssue {
   code: AuditRuleCode;
@@ -77,8 +78,19 @@ interface Rect {
 export function auditDesignDocument(doc: DesignDocument): DesignAuditIssue[] {
   const issues: DesignAuditIssue[] = [];
 
-  // 1. Dialog AcceptButton / CancelButton check on FixedDialog forms
+  // 1. Dialog AcceptButton / CancelButton check on FixedDialog forms & High-DPI AutoScaleMode check
   if (doc.baseType === 'Form') {
+    const autoScaleMode = doc.form.properties.AutoScaleMode;
+    if (isEnumValue(autoScaleMode) && autoScaleMode.value === 'None') {
+      issues.push({
+        code: 'high-dpi-autoscale-none',
+        severity: 'warning',
+        nodeId: doc.form.id,
+        controlName: doc.form.name,
+        message: `Form "${doc.form.name}" uses AutoScaleMode.None, which can clip or blur on High-DPI monitors. Switch to AutoScaleMode.Font.`,
+      });
+    }
+
     const borderStyle = doc.form.properties.FormBorderStyle;
     if (isEnumValue(borderStyle) && borderStyle.value === 'FixedDialog') {
       if (!doc.form.properties.AcceptButton) {
@@ -173,6 +185,7 @@ function auditContainer(
         for (let j = i + 1; j < positioned.length; j++) {
           const a = positioned[i];
           const b = positioned[j];
+          if (a.node.inherited && b.node.inherited) continue;
           if (rectsOverlap(a.rect, b.rect)) {
             issues.push({
               code: 'overlapping-controls',

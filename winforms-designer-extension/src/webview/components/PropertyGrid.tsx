@@ -3,9 +3,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { getControlDefinition, getPropertiesForControl, type PropertyDefinition } from '../../shared/catalog';
-import type { DesignNode, PropertyValue } from '../../shared/model';
-import { isPaddingValue, isPointValue, isSizeFValue, isSizeValue } from '../../shared/model';
-import { allNodes, getNode, validateRename, type CollectionEditorKind, type DesignerState, type DesignerStore } from '../state/designerStore';
+import type { DesignNode, PropertyValue, ResourceMap } from '../../shared/model';
+import { isPaddingValue, isPointValue, isResourceValue, isSizeFValue, isSizeValue } from '../../shared/model';
+import { allNodes, DEFAULT_CULTURE, getNode, validateRename, type CollectionEditorKind, type DesignerState, type DesignerStore } from '../state/designerStore';
 import { getTableTracks } from '../state/layoutEngine';
 import { formatValue, makePadding, resolveImage, valuesEqual } from '../state/nodeProps';
 import { ContextMenu, Popover } from './ContextMenu';
@@ -37,6 +37,7 @@ const COLLECTION_KIND: Partial<Record<PropertyDefinition['editor'], CollectionEd
   tableLayoutCollection: 'tableLayout',
   treeNodesCollection: 'treeNodes',
   listViewColumnsCollection: 'listViewColumns',
+  dataBindingsCollection: 'dataBindings',
 };
 
 function countTreeNodes(items: DesignNode['treeNodes']): number {
@@ -59,6 +60,8 @@ function collectionModified(n: DesignNode, coll: CollectionEditorKind): boolean 
       return !!n.treeNodes?.length;
     case 'listViewColumns':
       return !!n.listViewColumns?.length;
+    case 'dataBindings':
+      return !!n.dataBindings?.length;
   }
 }
 
@@ -70,8 +73,24 @@ interface Row {
   extra?: boolean;
 }
 
-function readValue(node: DesignNode, def: PropertyDefinition): PropertyValue | undefined {
+function readValue(
+  node: DesignNode,
+  def: PropertyDefinition,
+  cultureStrings?: Record<string, string>,
+  resources?: ResourceMap
+): PropertyValue | undefined {
   if (def.name === 'Name') return node.name;
+  if (def.name === 'Text') {
+    if (cultureStrings) {
+      const localized = cultureStrings[node.type === 'Form' || node.type === 'UserControl' ? '$this.Text' : `${node.name}.Text`];
+      if (localized !== undefined) return localized;
+    }
+    const raw = node.properties.Text;
+    if (isResourceValue(raw) && resources) {
+      const entry = resources[raw.resourceName];
+      if (entry && entry.kind === 'string') return entry.value;
+    }
+  }
   return node.properties[def.name];
 }
 
@@ -101,6 +120,8 @@ function collectionLabel(node: DesignNode, kind: CollectionEditorKind): string {
       return `(Collection) ${countTreeNodes(node.treeNodes)}`;
     case 'listViewColumns':
       return `(Collection) ${node.listViewColumns?.length ?? 0}`;
+    case 'dataBindings':
+      return `(Bindings) ${node.dataBindings?.length ?? 0}`;
   }
 }
 
@@ -129,13 +150,17 @@ export function PropertyGrid({ state, store }: { state: DesignerState; store: De
     setNameError(null);
   }, [idsKey]);
 
+  const localized = state.activeCulture !== DEFAULT_CULTURE;
+  const cultureStrings = localized ? state.cultureStrings : undefined;
+  const inheritedNode = nodes.find((n) => n.inherited);
+
   const rows: Row[] = useMemo(() => {
     const defsPerNode = nodes.map((n) => getPropertiesForControl(n.type));
     let defs = defsPerNode[0];
     for (const other of defsPerNode.slice(1)) defs = defs.filter((d) => other.some((o) => o.name === d.name));
     if (multi) defs = defs.filter((d) => d.editor !== 'name');
     const out: Row[] = defs.map((def) => {
-      const values = nodes.map((n) => readValue(n, def));
+      const values = nodes.map((n) => readValue(n, def, cultureStrings, doc.resources));
       const mixed = values.some(
         (v, i) => !valuesEqual(v ?? effectiveDefault(nodes[i], def), values[0] ?? effectiveDefault(nodes[0], def))
       );
@@ -159,7 +184,7 @@ export function PropertyGrid({ state, store }: { state: DesignerState; store: De
       }
     }
     return out;
-  }, [nodes, multi, first]);
+  }, [nodes, multi, first, cultureStrings, doc.resources]);
 
   const q = filter.trim().toLowerCase();
   const visible = rows.filter((r) => !q || r.def.name.toLowerCase().includes(q));
@@ -178,7 +203,7 @@ export function PropertyGrid({ state, store }: { state: DesignerState; store: De
   };
 
   const reset = (row: Row) => store.setProperty(ids, row.def.name, undefined, `Reset ${row.def.name}`);
-  const ro = state.readOnly;
+  const ro = state.readOnly || !!inheritedNode;
 
   const renderEditor = (row: Row) => {
     const props: EditorProps = {
@@ -395,6 +420,22 @@ export function PropertyGrid({ state, store }: { state: DesignerState; store: De
         </Popover>
       ) : null}
 
+      {inheritedNode ? (
+        <div className="wd-pg-banner inherited" role="note" data-testid="prop-inherited-banner">
+          <Icon name="lock" size={12} />
+          <span>
+            Inherited from <b>{inheritedNode.inheritedFrom ?? doc.customBaseClass ?? 'base class'}</b> (read-only)
+          </span>
+        </div>
+      ) : null}
+      {localized ? (
+        <div className="wd-pg-banner culture" role="note" data-testid="prop-culture-banner">
+          <Icon name="info" size={12} />
+          <span>
+            Editing <b>Text</b> for culture <code>{state.activeCulture}</code>; other properties use the default resources.
+          </span>
+        </div>
+      ) : null}
       <div className="wd-pg-toolbar">
         <button type="button" className={`wd-tb-btn ${mode === 'categorized' ? 'active' : ''}`} title="Categorized" aria-pressed={mode === 'categorized'} onClick={() => setMode('categorized')}>
           <Icon name="categorized" />

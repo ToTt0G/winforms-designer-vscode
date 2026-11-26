@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.1.0 — 2026-11-26
+
+### Added
+
+- **Run / Build / Stop.** A toolbar **Run** button and a status bar item (**Run**, **Building...**, **Stop**) build and launch the active project. Supports .NET 6–10 through `dotnet`, .NET Framework 4.x through MSBuild located with `vswhere`, WSL through Windows `dotnet.exe` with `wslpath` path conversion, and a macOS / Linux compile-check using `EnableWindowsTargeting=true`. All files are saved and any previous instance is stopped before each run, which avoids MSB3027 file-lock failures.
+- **WinForms Explorer** view in the Activity Bar listing every form and user control in the workspace, with New Form, Run, Build and Refresh in its title bar and Open Designer, View Code and Delete on each item.
+- **New WinForms Project...** scaffolds a complete, runnable project for `net10.0-windows`, `net9.0-windows`, `net8.0-windows` or `net48`.
+- **Delete Form & Sibling Files** removes a form's `.cs`, `.Designer.cs` and `.resx` in one step.
+- **Explorer file nesting** defaults that group `.Designer.cs` and `.resx` files under their form.
+- **On-canvas strip editing.** Add **Type Here** items to `MenuStrip`, `ToolStrip` and `StatusStrip`, double-click to rename, and hover to delete.
+- **Ctrl+Drag duplicate.** Dragging with `Ctrl` held drops a copy with fresh names, shows a ghost and a **+** badge, and leaves the original in place.
+- **DataBindings editor** for simple bindings, with a live preview of the generated `DataBindings.Add(...)` statement. Both full and shorthand `Binding` forms are parsed.
+- **Inherited forms.** Base `Form` and `UserControl` chains are resolved statically from source (case-insensitive, cycle-safe, `bin/` and `obj/` ignored). Inherited controls render with a badge, are read-only in the Property Grid, cannot be deleted, and are never written into the derived `.Designer.cs`.
+- **Multi-culture localization.** A toolbar culture switcher discovers `Form.<culture>.resx` files, displays localized text on the canvas and edits culture values in place. Invalid culture names and path traversal are rejected.
+- **Audit auto-fix.** **Fix** corrects a single issue and **Fix All** applies every automatic fix as one undo step, covering duplicate `TabIndex`, missing dialog `AcceptButton` / `CancelButton`, missing accessible text, and out-of-range `NumericUpDown`, `ProgressBar` and `SplitContainer` values.
+- **High-DPI audit rule** flags `AutoScaleMode.None` and fixes it to `AutoScaleMode.Font`.
+- **Interactive Live Preview controls**: working MenuStrip dropdowns, NumericUpDown spinners, TrackBar dragging and DataGridView column sorting.
+
+### Changed
+
+- Pixel-fidelity pass on control rendering. Fluent now follows Windows 11 metrics; Classic draws Win32 chrome with a gradient title bar, 3D bevels and a segmented progress bar.
+- New extension icon and Activity Bar icon.
+- README screenshots and demo recordings refreshed for 1.1.0.
+
+### Fixed
+
+- Live Preview no longer shows placeholder rows on a `DataGridView` with `AllowUserToAddRows = false`, or design-time **Type Here** slots on strips.
+- Pressing `Esc` in Live Preview closes an open menu dropdown first instead of the whole preview.
+- `Localizable` is never emitted into generated C#.
+
 ## 1.0.1 — 2026-11-26
 
 ### Added

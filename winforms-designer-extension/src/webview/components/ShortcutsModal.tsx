@@ -48,6 +48,8 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
     items: [
       { keys: [['Tab Order']], label: 'Toolbar: click controls in focus order, Esc to finish' },
       { keys: [['Alt', 'Drag']], label: 'Ignore snaplines and grid while dragging' },
+      { keys: [['Ctrl', 'Drag']], label: 'Duplicate selection: drop a copy, leaving the original in place' },
+      { keys: [['Type Here'], ['+']], label: 'Click a MenuStrip / ToolStrip / StatusStrip slot to add an item; double-click an item to rename' },
       { keys: [['Ctrl', 'Click'], ['Shift', 'Click']], label: 'Add or remove a control from the selection' },
     ],
   },

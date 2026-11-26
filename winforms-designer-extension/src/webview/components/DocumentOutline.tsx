@@ -57,7 +57,8 @@ export function DocumentOutline({ state, store }: { state: DesignerState; store:
     const id = e.dataTransfer.getData(OUTLINE_MIME);
     if (!id || id === target.parentId || isDescendantOf(doc, target.parentId, id)) return;
     const sel = state.selection.includes(id) ? state.selection : [id];
-    const ids = sel.filter((s) => s !== target.parentId && !isDescendantOf(doc, target.parentId, s) && !isRootNode(getNode(doc, s) ?? doc.form));
+    const ids = sel.filter((s) => s !== target.parentId && !isDescendantOf(doc, target.parentId, s) && !isRootNode(getNode(doc, s) ?? doc.form) && !getNode(doc, s)?.inherited);
+    if (!ids.length) return;
     const tn = getNode(doc, target.parentId);
     store.update((d) => reparentNodes(d, ids, target, {}), `Move to ${tn?.name ?? ''}`);
   };
@@ -84,16 +85,16 @@ export function DocumentOutline({ state, store }: { state: DesignerState; store:
     return (
       <li key={node.id} role="treeitem" aria-expanded={hasKids ? open : undefined} aria-selected={selected}>
         <div
-          className={`wd-tree-row ${selected ? 'selected' : ''} ${isPrimary ? 'primary' : ''} ${state.hoverId === node.id ? 'hover' : ''} ${dropKey === key ? 'drop' : ''}`}
+          className={`wd-tree-row ${node.inherited ? 'inherited' : ''} ${selected ? 'selected' : ''} ${isPrimary ? 'primary' : ''} ${state.hoverId === node.id ? 'hover' : ''} ${dropKey === key ? 'drop' : ''}`}
           style={{ paddingLeft: 6 + depth * 14 }}
           data-outline-id={node.id}
-          draggable={!isRootNode(node) && !(state.locked || state.readOnly)}
+          draggable={!isRootNode(node) && !node.inherited && !(state.locked || state.readOnly)}
           onDragStart={(e) => {
             e.dataTransfer.setData(OUTLINE_MIME, node.id);
             e.dataTransfer.effectAllowed = 'move';
           }}
           onClick={(e) => onRowClick(e, node.id)}
-          onDoubleClick={() => !isRootNode(node) && setRenaming(node.id)}
+          onDoubleClick={() => !isRootNode(node) && !node.inherited && setRenaming(node.id)}
           onPointerEnter={() => store.setState({ hoverId: node.id })}
           onPointerLeave={() => store.getState().hoverId === node.id && store.setState({ hoverId: null })}
           onContextMenu={(e) => {
@@ -124,6 +125,11 @@ export function DocumentOutline({ state, store }: { state: DesignerState; store:
           ) : (
             <span className="wd-tree-name">{node.name}</span>
           )}
+          {node.inherited ? (
+            <span className="wd-tree-inherited" title={`Inherited from ${node.inheritedFrom ?? 'base class'} (read-only)`} data-testid="outline-inherited-badge">
+              <Icon name="inherited" size={10} />
+            </span>
+          ) : null}
           <span className="wd-tree-type">{node.type}</span>
         </div>
         {hasKids && open ? (
@@ -170,13 +176,14 @@ export function DocumentOutline({ state, store }: { state: DesignerState; store:
   const menuItems = (id: string): MenuItem[] => {
     const node = getNode(doc, id);
     const root = node ? isRootNode(node) : true;
+    const frozen = state.locked || state.readOnly || !!node?.inherited;
     return [
-      { id: 'rename', label: 'Rename', icon: 'edit', shortcut: 'F2', disabled: root, onSelect: () => setRenaming(id) },
-      { id: 'dup', label: 'Duplicate', icon: 'duplicate', shortcut: 'Ctrl+D', disabled: root || (state.locked || state.readOnly), onSelect: () => store.duplicateSelection() },
-      { id: 'del', label: 'Delete', icon: 'trash', shortcut: 'Del', disabled: root || (state.locked || state.readOnly), onSelect: () => store.deleteSelection() },
+      { id: 'rename', label: 'Rename', icon: 'edit', shortcut: 'F2', disabled: root || !!node?.inherited || state.readOnly, onSelect: () => setRenaming(id) },
+      { id: 'dup', label: 'Duplicate', icon: 'duplicate', shortcut: 'Ctrl+D', disabled: root || frozen, onSelect: () => store.duplicateSelection() },
+      { id: 'del', label: 'Delete', icon: 'trash', shortcut: 'Del', disabled: root || frozen, onSelect: () => store.deleteSelection() },
       { id: 's', separator: true },
-      { id: 'front', label: 'Bring to Front', icon: 'bringToFront', disabled: root || node?.isComponent || (state.locked || state.readOnly), onSelect: () => store.zOrder('front') },
-      { id: 'back', label: 'Send to Back', icon: 'sendToBack', disabled: root || node?.isComponent || (state.locked || state.readOnly), onSelect: () => store.zOrder('back') },
+      { id: 'front', label: 'Bring to Front', icon: 'bringToFront', disabled: root || node?.isComponent || frozen, onSelect: () => store.zOrder('front') },
+      { id: 'back', label: 'Send to Back', icon: 'sendToBack', disabled: root || node?.isComponent || frozen, onSelect: () => store.zOrder('back') },
     ];
   };
 

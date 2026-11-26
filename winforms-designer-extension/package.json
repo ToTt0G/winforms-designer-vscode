@@ -1,8 +1,8 @@
 {
   "name": "winforms-designer-modern",
-  "displayName": "Modern WinForms Designer",
-  "description": "A visual Windows Forms designer inside VS Code, inspired by Visual Studio 2026.",
-  "version": "1.0.1",
+  "displayName": "Modern WinForms Designer (Cross-Platform)",
+  "description": "Zero-setup visual Windows Forms (.Designer.cs) designer for VS Code — live DPI preview, layout auditor, snaplines & C# sync on Windows, macOS & Linux. No .NET needed.",
+  "version": "1.1.0",
   "publisher": "ToTt0G",
   "author": {
     "name": "ToTt0G"
@@ -27,6 +27,13 @@
     "visual designer",
     "form designer",
     "gui designer",
+    "cross-platform",
+    "macos",
+    "linux",
+    "live preview",
+    "layout auditor",
+    "wysiwyg",
+    "drag and drop",
     "csharp",
     "c#",
     "dotnet",
@@ -47,13 +54,26 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onCustomEditor:winformsDesigner.editor",
+    "onView:winformsDesigner.formsView",
     "onCommand:winforms.openDesigner",
     "onCommand:winforms.newForm",
     "onCommand:winforms.newUserControl",
+    "onCommand:winforms.newProject",
     "onCommand:winforms.viewCode",
-    "onCommand:winforms.viewDesignerCode"
+    "onCommand:winforms.viewDesignerCode",
+    "onCommand:winforms.buildApp",
+    "onCommand:winforms.runApp",
+    "onCommand:winforms.stopApp",
+    "onCommand:winforms.deleteForm",
+    "onCommand:winforms.refreshFormsView"
   ],
   "contributes": {
+    "configurationDefaults": {
+      "explorer.fileNesting.enabled": true,
+      "explorer.fileNesting.patterns": {
+        "*.cs": "${capture}.Designer.cs, ${capture}.designer.cs, ${capture}.resx"
+      }
+    },
     "customEditors": [
       {
         "viewType": "winformsDesigner.editor",
@@ -67,6 +87,29 @@
           }
         ],
         "priority": "option"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "winformsDesigner",
+          "title": "WinForms Designer",
+          "icon": "images/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "winformsDesigner": [
+        {
+          "id": "winformsDesigner.formsView",
+          "name": "Forms & Controls"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "winformsDesigner.formsView",
+        "contents": "No WinForms (.Designer.cs) files found in this workspace.\n[New WinForms Project...](command:winforms.newProject)\n[New Windows Form...](command:winforms.newForm)"
       }
     ],
     "commands": [
@@ -99,6 +142,42 @@
         "title": "New User Control...",
         "category": "WinForms",
         "icon": "$(symbol-class)"
+      },
+      {
+        "command": "winforms.newProject",
+        "title": "New WinForms Project...",
+        "category": "WinForms",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "winforms.buildApp",
+        "title": "Build WinForms Project",
+        "category": "WinForms",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "winforms.runApp",
+        "title": "Run WinForms Project",
+        "category": "WinForms",
+        "icon": "$(play)"
+      },
+      {
+        "command": "winforms.stopApp",
+        "title": "Stop Running WinForms App",
+        "category": "WinForms",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "winforms.deleteForm",
+        "title": "Delete Form & Sibling Files",
+        "category": "WinForms",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "winforms.refreshFormsView",
+        "title": "Refresh Forms Explorer",
+        "category": "WinForms",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -141,6 +220,55 @@
           "command": "winforms.newUserControl",
           "when": "explorerResourceIsFolder",
           "group": "navigation@3"
+        },
+        {
+          "command": "winforms.newProject",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@4"
+        },
+        {
+          "command": "winforms.deleteForm",
+          "when": "resourceExtname == .cs",
+          "group": "7_modification@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "winforms.newForm",
+          "when": "view == winformsDesigner.formsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "winforms.runApp",
+          "when": "view == winformsDesigner.formsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "winforms.buildApp",
+          "when": "view == winformsDesigner.formsView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "winforms.refreshFormsView",
+          "when": "view == winformsDesigner.formsView",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "winforms.openDesigner",
+          "when": "view == winformsDesigner.formsView && viewItem == winformsForm",
+          "group": "inline@1"
+        },
+        {
+          "command": "winforms.viewCode",
+          "when": "view == winformsDesigner.formsView && viewItem == winformsForm",
+          "group": "inline@2"
+        },
+        {
+          "command": "winforms.deleteForm",
+          "when": "view == winformsDesigner.formsView && viewItem == winformsForm",
+          "group": "7_modification@1"
         }
       ]
     },

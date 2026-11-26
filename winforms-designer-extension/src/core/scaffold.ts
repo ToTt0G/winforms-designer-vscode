@@ -16,6 +16,26 @@ export interface ScaffoldFormOptions extends ScaffoldOptions {
   template?: FormTemplateId;
 }
 
+export type WinFormsTargetFramework =
+  | 'net10.0-windows'
+  | 'net9.0-windows'
+  | 'net8.0-windows'
+  | 'net48';
+
+export interface ScaffoldProjectOptions {
+  projectName: string;
+  targetFramework?: WinFormsTargetFramework;
+  template?: FormTemplateId;
+  eol?: '\r\n' | '\n';
+}
+
+export interface ScaffoldedProjectFiles {
+  csprojContent: string;
+  programCsContent: string;
+  formCsContent: string;
+  designerCsContent: string;
+}
+
 export interface FormTemplateMetadata {
   id: FormTemplateId;
   label: string;
@@ -163,6 +183,115 @@ export function scaffoldFormFiles(options: ScaffoldFormOptions): { codeBehind: s
   return {
     codeBehind,
     designer: designerLines.join(eol) + eol,
+  };
+}
+
+function sanitizeProjectNamespace(projectName: string): string {
+  const parts = projectName
+    .trim()
+    .split('.')
+    .map((seg) => {
+      let clean = seg.trim().replace(/[^A-Za-z0-9_]/g, '_');
+      if (!clean) return '';
+      if (/^[0-9]/.test(clean)) clean = `_${clean}`;
+      return clean;
+    })
+    .filter((s) => s.length > 0);
+  return parts.length > 0 ? parts.join('.') : 'WinFormsApp';
+}
+
+/**
+ * Scaffolds a complete runnable Windows Forms project (`.csproj`, `Program.cs`,
+ * `MainForm.cs`, and `MainForm.Designer.cs`) for modern .NET or .NET Framework 4.8.
+ */
+export function scaffoldWinFormsProject(options: ScaffoldProjectOptions): ScaffoldedProjectFiles {
+  const {
+    projectName,
+    targetFramework = 'net10.0-windows',
+    template = 'blank',
+    eol = '\r\n',
+  } = options;
+
+  const isLegacyNet48 = targetFramework === 'net48';
+  const namespaceName = sanitizeProjectNamespace(projectName);
+
+  const csprojLines = isLegacyNet48
+    ? [
+        '<Project Sdk="Microsoft.NET.Sdk">',
+        '',
+        '  <PropertyGroup>',
+        '    <OutputType>WinExe</OutputType>',
+        `    <TargetFramework>${targetFramework}</TargetFramework>`,
+        '    <UseWindowsForms>true</UseWindowsForms>',
+        '  </PropertyGroup>',
+        '',
+        '</Project>',
+      ]
+    : [
+        '<Project Sdk="Microsoft.NET.Sdk">',
+        '',
+        '  <PropertyGroup>',
+        '    <OutputType>WinExe</OutputType>',
+        `    <TargetFramework>${targetFramework}</TargetFramework>`,
+        '    <Nullable>enable</Nullable>',
+        '    <UseWindowsForms>true</UseWindowsForms>',
+        '    <ImplicitUsings>enable</ImplicitUsings>',
+        '  </PropertyGroup>',
+        '',
+        '</Project>',
+      ];
+
+  const programLines = isLegacyNet48
+    ? [
+        'using System;',
+        'using System.Windows.Forms;',
+        '',
+        `namespace ${namespaceName}`,
+        '{',
+        '    internal static class Program',
+        '    {',
+        '        [STAThread]',
+        '        private static void Main()',
+        '        {',
+        '            Application.EnableVisualStyles();',
+        '            Application.SetCompatibleTextRenderingDefault(false);',
+        '            Application.Run(new MainForm());',
+        '        }',
+        '    }',
+        '}',
+      ]
+    : [
+        `namespace ${namespaceName};`,
+        '',
+        'static class Program',
+        '{',
+        '    /// <summary>',
+        '    ///  The main entry point for the application.',
+        '    /// </summary>',
+        '    [STAThread]',
+        '    static void Main()',
+        '    {',
+        '        ApplicationConfiguration.Initialize();',
+        '        Application.Run(new MainForm());',
+        '    }',
+        '}',
+      ];
+
+  const { codeBehind: formCsContent, designer: designerCsContent } = scaffoldFormFiles({
+    className: 'MainForm',
+    namespaceName,
+    baseType: 'Form',
+    fileScopedNamespace: !isLegacyNet48,
+    nullable: !isLegacyNet48,
+    eol,
+    template,
+  });
+
+  return {
+    csprojContent: csprojLines.join(eol) + eol,
+    programCsContent: programLines.join(eol) + eol,
+    formCsContent,
+    designerCsContent,
   };
 }
 

@@ -1,9 +1,11 @@
 // Immutable designer state, undo/redo with coalesced gestures, clipboard and host sync.
 
 import { useSyncExternalStore } from 'react';
+import { auditDesignDocument, type DesignAuditIssue } from '../../shared/auditor';
 import { getControlDefinition } from '../../shared/catalog';
-import type { CodeBehindMethod, DesignDocument, DesignerSettings, DesignNode, PropertyValue, ResourceValue } from '../../shared/model';
-import type { HostToWebviewMessage, ThemeKind, WebviewToHostMessage } from '../../shared/protocol';
+import type { CodeBehindMethod, DesignDocument, DesignerSettings, DesignNode, PropertyValue, ResourceValue, StripItemNode } from '../../shared/model';
+import { isValidCultureTag, type HostToWebviewMessage, type ThemeKind, type WebviewToHostMessage } from '../../shared/protocol';
+import { applyAuditFix, FIXABLE_AUDIT_CODES } from './auditFixes';
 import { autoPlaceCells, computeLayoutTree, getActiveTabIndex, isContainerNode, type LayoutMap } from './layoutEngine';
 import { getDock, getLocation, getSize, isRootNode, sizePropertyName } from './nodeProps';
 import {
@@ -21,12 +23,15 @@ import {
   handlerNameFor,
   insertNodes,
   isMovable,
+  newStripItem,
+  reserveExactOrNumberedName,
   propagateAnchors,
   removeNodes,
   reorderZ,
   rewriteControlRefs,
   setNodeRect,
   setProps,
+  setStripItems,
   topLevelIds,
   updateNode,
   updateNodes,
@@ -37,6 +42,7 @@ import {
 } from './treeOps';
 
 export * from './treeOps';
+export { applyAuditFix, canFixAuditIssue, FIXABLE_AUDIT_CODES, humanizeControlName } from './auditFixes';
 
 export type RenderStyle = 'fluent' | 'classic';
 
@@ -52,7 +58,10 @@ export const DEFAULT_SETTINGS: DesignerSettings = {
   eventHandlerStyle: 'auto',
 };
 
-export type CollectionEditorKind = 'items' | 'columns' | 'tabPages' | 'stripItems' | 'tableLayout' | 'treeNodes' | 'listViewColumns';
+export type CollectionEditorKind = 'items' | 'columns' | 'tabPages' | 'stripItems' | 'tableLayout' | 'treeNodes' | 'listViewColumns' | 'dataBindings';
+
+/** Culture key used by the neutral (default) resources, i.e. the .Designer.cs values. */
+export const DEFAULT_CULTURE = 'default';
 
 export interface DesignerState {
   doc: DesignDocument | null;
@@ -91,6 +100,14 @@ export interface DesignerState {
   readOnlyReason: string;
   /** GitHub star prompt requested by the host; null when hidden. */
   starPrompt: { repoUrl: string } | null;
+  /** True when the host found a buildable .csproj for this form (enables Run). */
+  hasProject: boolean;
+  /** Cultures with resources for this form; always starts with 'default'. */
+  availableCultures: string[];
+  /** Culture currently shown on the canvas ('default' = neutral resources). */
+  activeCulture: string;
+  /** Localized resource strings for `activeCulture`, keyed like `button1.Text` / `$this.Text`. */
+  cultureStrings: Record<string, string>;
 }
 
 type Listener = () => void;
@@ -148,6 +165,10 @@ export class DesignerStore {
       readOnly: false,
       readOnlyReason: '',
       starPrompt: null,
+      hasProject: false,
+      availableCultures: [DEFAULT_CULTURE],
+      activeCulture: DEFAULT_CULTURE,
+      cultureStrings: {},
     };
   }
 
@@ -219,6 +240,11 @@ export class DesignerStore {
       return;
     }
     if (!this.ensureWritable()) return;
+    const violation = inheritanceViolation(prev, next);
+    if (violation) {
+      this.setState({ ...patch, status: `${violation} is inherited and cannot be modified`, statusTone: 'warning' });
+      return;
+    }
     const adjusted = propagateAnchors(prev, next, { activeTabs: this.state.activeTabs });
     this.undoStack.push(prev);
     if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
@@ -314,6 +340,8 @@ export class DesignerStore {
           selection: [msg.document.form.id],
           activeTabs: {},
           status: 'Loaded',
+          hasProject: !!msg.hasProject,
+          ...cultureStateFrom(msg, { availableCultures: [DEFAULT_CULTURE], activeCulture: DEFAULT_CULTURE, cultureStrings: {} }),
         });
         break;
       case 'documentUpdated': {
@@ -347,6 +375,7 @@ export class DesignerStore {
           resourceDataUris: { ...this.state.resourceDataUris, ...msg.resourceDataUris },
           selection: selection.length ? selection : [doc.form.id],
           ...syncStatusFor(msg.source, reason, this.state.status),
+          ...cultureStateFrom(msg, this.state),
         });
         break;
       }
@@ -388,6 +417,12 @@ export class DesignerStore {
         break;
       case 'showStarPrompt':
         this.setState({ starPrompt: { repoUrl: msg.repoUrl } });
+        break;
+      case 'cultureChanged':
+        this.setState({
+          ...cultureStateFrom(msg, this.state),
+          status: msg.activeCulture === DEFAULT_CULTURE ? 'Showing default culture' : `Showing culture ${msg.activeCulture}`,
+        });
         break;
       case 'command':
         switch (msg.command) {
@@ -573,7 +608,7 @@ export class DesignerStore {
   deleteSelection() {
     const doc = this.state.doc;
     if (!doc) return;
-    const ids = this.state.selection.filter((id) => id !== doc.form.id);
+    const ids = this.editableIds(this.state.selection.filter((id) => id !== doc.form.id), 'deleted');
     if (!ids.length) return;
     const f = findNode(doc, ids[0]);
     const parentId = f?.parent?.id ?? doc.form.id;
@@ -592,6 +627,10 @@ export class DesignerStore {
       void navigator.clipboard?.writeText(nodes.map((n) => n.name).join('\n'));
     } catch {
       /* clipboard may be unavailable */
+    }
+    if (cut) {
+      const cuttable = this.editableIds(ids, 'cut');
+      if (cuttable.length !== ids.length) return;
     }
     if (cut) this.commit(removeNodes(doc, ids), `Cut ${ids.length === 1 ? nodes[0].name : `${ids.length} controls`}`, { selection: [f?.parent?.id ?? doc.form.id] });
     else this.setState({ status: `Copied ${nodes.length === 1 ? nodes[0].name : `${nodes.length} controls`}` });
@@ -613,7 +652,7 @@ export class DesignerStore {
   duplicateSelection() {
     const doc = this.state.doc;
     if (!doc) return;
-    const ids = topLevelIds(doc, this.state.selection.filter((id) => id !== doc.form.id));
+    const ids = this.editableIds(topLevelIds(doc, this.state.selection.filter((id) => id !== doc.form.id)), 'duplicated');
     if (!ids.length) return;
     const f = findNode(doc, ids[0]);
     const nodes = ids.map((id) => getNode(doc, id)!).filter(Boolean);
@@ -642,20 +681,27 @@ export class DesignerStore {
   align(op: AlignOp) {
     const doc = this.state.doc;
     if (!doc) return;
-    this.commit(alignSelection(doc, this.state.selection, op, this.state.layout), labelForAlign(op));
+    const ids = this.editableIds(this.state.selection, 'aligned');
+    if (!ids.length) return;
+    this.commit(alignSelection(doc, ids, op, this.state.layout), labelForAlign(op));
   }
 
   zOrder(where: 'front' | 'back') {
     const doc = this.state.doc;
     if (!doc) return;
-    this.commit(reorderZ(doc, this.state.selection.filter((id) => id !== doc.form.id), where), where === 'front' ? 'Bring to Front' : 'Send to Back');
+    const ids = this.editableIds(this.state.selection.filter((id) => id !== doc.form.id), 'reordered');
+    if (!ids.length) return;
+    this.commit(reorderZ(doc, ids, where), where === 'front' ? 'Bring to Front' : 'Send to Back');
   }
 
   /** Moves (and optionally resizes) the selection by a delta, e.g. arrow-key nudge. */
   nudge(dx: number, dy: number, resize: boolean) {
     const doc = this.state.doc;
     if (!doc || this.state.locked) return;
-    const ids = this.state.selection.filter((id) => id !== doc.form.id && (resize || isMovable(doc, id, this.state.layout)));
+    const ids = this.editableIds(
+      this.state.selection.filter((id) => id !== doc.form.id && (resize || isMovable(doc, id, this.state.layout))),
+      resize ? 'resized' : 'moved'
+    );
     if (!ids.length) {
       if (resize && this.state.selection[0] === doc.form.id) {
         const s = getSize(doc.form);
@@ -676,9 +722,15 @@ export class DesignerStore {
     );
   }
 
-  setProperty(ids: string[], name: string, value: PropertyValue | undefined, description?: string) {
+  setProperty(ids0: string[], name: string, value: PropertyValue | undefined, description?: string) {
     const doc = this.state.doc;
-    if (!doc || !ids.length) return;
+    if (!doc || !ids0.length) return;
+    const ids = this.editableIds(ids0, 'edited');
+    if (!ids.length) return;
+    if (name === 'Text' && this.state.activeCulture !== DEFAULT_CULTURE) {
+      this.setCultureText(ids, typeof value === 'string' ? value : '');
+      return;
+    }
     if (name === 'Name') {
       if (ids.length !== 1 || typeof value !== 'string') return;
       this.rename(ids[0], value);
@@ -717,6 +769,11 @@ export class DesignerStore {
     if (!doc) return 'No document';
     const node = getNode(doc, id);
     if (!node || node.name === newName.trim()) return null;
+    if (node.inherited) {
+      const msg = `${node.name} is inherited from ${node.inheritedFrom ?? 'the base class'} and cannot be renamed`;
+      this.setState({ status: msg, statusTone: 'warning' });
+      return msg;
+    }
     const err = validateRename(doc, id, newName);
     if (err) {
       this.setState({ status: err });
@@ -761,6 +818,13 @@ export class DesignerStore {
     if (!doc) return;
     const node = getNode(doc, nodeId);
     if (!node) return;
+    if (node.inherited) {
+      this.setState({
+        status: `${node.name} is inherited from ${node.inheritedFrom ?? 'the base class'} and its events cannot be edited here`,
+        statusTone: 'warning',
+      });
+      return;
+    }
     let methodName = node.events[eventName];
     if (!methodName && !createIfMissing) return;
     if (!methodName) {
@@ -872,13 +936,201 @@ export class DesignerStore {
     const doc = this.state.doc;
     if (!doc) return;
     const f = findNode(doc, nodeId);
-    if (!f?.parent) return;
+    if (!f?.parent || !this.editableIds([nodeId], 'edited').length) return;
     const key = f.parent.id;
     const index = this.state.tabOrderNext[key] ?? 0;
     this.commit(updateNode(doc, nodeId, (n) => setProps(n, { TabIndex: index })), `TabIndex ${f.node.name} = ${index}`, {
       tabOrderNext: { ...this.state.tabOrderNext, [key]: index + 1 },
       tabOrderAssigned: [...this.state.tabOrderAssigned.filter((i) => i !== nodeId), nodeId],
     });
+  }
+
+  // ---- inherited controls ---------------------------------------------------
+
+  /** True when the node is inherited from a base Form / UserControl (read-only in this designer). */
+  isInherited(id: string): boolean {
+    const doc = this.state.doc;
+    return !!(doc && getNode(doc, id)?.inherited);
+  }
+
+  /** Drops inherited nodes from `ids`, explaining in the status line when anything was skipped. */
+  private editableIds(ids: string[], verb: string): string[] {
+    const doc = this.state.doc;
+    if (!doc) return [];
+    const out = ids.filter((id) => !getNode(doc, id)?.inherited);
+    if (out.length !== ids.length) {
+      const blocked = getNode(doc, ids.find((id) => !out.includes(id))!);
+      this.setState({
+        status: `${blocked?.name ?? 'Control'} is inherited from ${blocked?.inheritedFrom ?? 'the base class'} and cannot be ${verb}`,
+        statusTone: 'warning',
+      });
+    }
+    return out;
+  }
+
+  /** Generic single-node edit used by collection editors (e.g. DataBindings). */
+  updateNode(id: string, fn: (n: DesignNode) => DesignNode, description: string) {
+    const doc = this.state.doc;
+    if (!doc || !this.editableIds([id], 'edited').length) return;
+    this.commit(updateNode(doc, id, fn), description);
+  }
+
+  // ---- on-canvas strip editing -------------------------------------------------
+
+  /** Adds a strip item typed on the canvas ("Type Here" / "+") as one undoable step. */
+  addStripItem(stripId: string, text: string): string | null {
+    const doc = this.state.doc;
+    const strip = doc ? getNode(doc, stripId) : undefined;
+    const label = text.trim();
+    if (!doc || !strip || !label || !this.editableIds([stripId], 'edited').length) return null;
+    const type: StripItemNode['type'] =
+      strip.type === 'MenuStrip' || strip.type === 'ContextMenuStrip' ? 'ToolStripMenuItem' : strip.type === 'StatusStrip' ? 'ToolStripStatusLabel' : 'ToolStripButton';
+    const taken = collectNames(doc);
+    const item = newStripItem(doc, type, label, new Set(taken));
+    item.name = stripItemNameFor(doc, label, type, taken);
+    item.text = label;
+    this.commit(setStripItems(doc, stripId, [...(strip.stripItems ?? []), item]), `Add ${item.name}`, { selection: [stripId] });
+    return item.id;
+  }
+
+  renameStripItem(stripId: string, itemId: string, text: string) {
+    const doc = this.state.doc;
+    const strip = doc ? getNode(doc, stripId) : undefined;
+    const item = strip?.stripItems?.find((i) => i.id === itemId);
+    if (!doc || !strip || !item || item.text === text || !this.editableIds([stripId], 'edited').length) return;
+    const items = (strip.stripItems ?? []).map((i) => (i.id === itemId ? { ...i, text } : i));
+    this.commit(setStripItems(doc, stripId, items), `Set ${item.name}.Text`, { selection: [stripId] });
+  }
+
+  removeStripItem(stripId: string, itemId: string) {
+    const doc = this.state.doc;
+    const strip = doc ? getNode(doc, stripId) : undefined;
+    const item = strip?.stripItems?.find((i) => i.id === itemId);
+    if (!doc || !strip || !item || !this.editableIds([stripId], 'edited').length) return;
+    this.commit(
+      setStripItems(
+        doc,
+        stripId,
+        (strip.stripItems ?? []).filter((i) => i.id !== itemId)
+      ),
+      `Delete ${item.name}`,
+      { selection: [stripId] }
+    );
+  }
+
+  // ---- Ctrl+drag copy ------------------------------------------------------------
+
+  /**
+   * Clones `ids` into `target` (fresh identities and unique C# names), optionally at explicit
+   * container-relative locations, as one undoable commit. The originals are untouched.
+   */
+  cloneNodesTo(ids: string[], target: InsertTarget, locations: Record<string, { x: number; y: number }> | null) {
+    const doc = this.state.doc;
+    if (!doc) return;
+    const sources = this.editableIds(ids, 'duplicated')
+      .map((id) => getNode(doc, id))
+      .filter((n): n is DesignNode => !!n && !n.isComponent && !isRootNode(n));
+    if (!sources.length) return;
+    const taken = collectNames(doc);
+    const parent = getNode(doc, target.parentId);
+    const clones = sources.map((n) => {
+      let c = cloneWithFreshIdentity(doc, n, taken);
+      const loc = locations?.[n.id];
+      if (loc && getDock(c) === 'None') c = setNodeRect(c, loc);
+      if (parent?.type === 'SplitContainer') c = { ...c, panelSlot: target.slot === 'Panel2' ? 'Panel2' : 'Panel1' };
+      else delete c.panelSlot;
+      if (parent?.type === 'TableLayoutPanel') {
+        if (target.cell) c = { ...c, tableCell: { ...target.cell } };
+        else delete c.tableCell;
+      } else {
+        delete c.tableCell;
+      }
+      return c;
+    });
+    this.commit(insertNodes(doc, clones, target), `Copy ${clones.length === 1 ? `${sources[0].name} to ${clones[0].name}` : `${clones.length} controls`}`, {
+      selection: clones.map((c) => c.id),
+    });
+  }
+
+  // ---- audit auto-fix --------------------------------------------------------------
+
+  fixAuditIssue(issue: DesignAuditIssue) {
+    const doc = this.state.doc;
+    if (!doc) return;
+    const next = applyAuditFix(doc, issue, this.state.layout);
+    if (next === doc) {
+      this.setState({ status: `No automatic fix available for ${issue.controlName}`, statusTone: 'warning' });
+      return;
+    }
+    this.commit(next, `Fix ${auditFixLabel(issue)}`);
+  }
+
+  fixAllAuditIssues() {
+    const doc = this.state.doc;
+    if (!doc) return;
+    let next = doc;
+    let fixed = 0;
+    for (const issue of auditDesignDocument(doc).filter((i) => FIXABLE_AUDIT_CODES.has(i.code))) {
+      const out = applyAuditFix(next, issue, this.state.layout);
+      if (out !== next) fixed++;
+      next = out;
+    }
+    if (!fixed) {
+      this.setState({ status: 'No automatically fixable audit issues', statusTone: 'info' });
+      return;
+    }
+    this.commit(next, `Fix ${fixed} audit issue${fixed === 1 ? '' : 's'}`);
+  }
+
+  // ---- localization ----------------------------------------------------------------
+
+  switchCulture(culture: string) {
+    const c = culture || DEFAULT_CULTURE;
+    if (c === this.state.activeCulture) return;
+    this.setState({ activeCulture: c, cultureStrings: c === DEFAULT_CULTURE ? {} : this.state.cultureStrings, inlineEditId: null });
+    this.send({ type: 'switchCulture', culture: c });
+  }
+
+  addCulture(culture: string): string | null {
+    const tag = culture.trim();
+    if (tag.toLowerCase() === DEFAULT_CULTURE) return 'The default culture already exists';
+    if (!isValidCultureTag(tag)) return 'Enter a BCP-47 culture tag such as de, fr-CA or zh-Hans';
+    const exists = this.state.availableCultures.some((c) => c.toLowerCase() === tag.toLowerCase());
+    this.setState({
+      availableCultures: exists ? this.state.availableCultures : [...this.state.availableCultures, tag],
+      activeCulture: tag,
+      cultureStrings: exists && this.state.activeCulture === tag ? this.state.cultureStrings : {},
+      status: exists ? `Showing culture ${tag}` : `Added culture ${tag}`,
+    });
+    this.send({ type: 'addCulture', culture: tag });
+    return null;
+  }
+
+  /** Writes a localized Text into the active culture's .resx (never the default .Designer.cs text). */
+  private setCultureText(ids: string[], value: string) {
+    const doc = this.state.doc;
+    if (!doc || this.state.readOnly) return;
+    const culture = this.state.activeCulture;
+    const strings = { ...this.state.cultureStrings };
+    for (const id of ids) {
+      const node = getNode(doc, id);
+      if (!node) continue;
+      const key = isRootNode(node) ? '$this.Text' : `${node.name}.Text`;
+      strings[key] = value;
+      this.send({ type: 'setCultureValue', culture, key, value });
+    }
+    this.setState({ cultureStrings: strings, status: `Set Text (${culture})` });
+  }
+
+  /** Text shown for a node in the active culture (falls back to the default `Text`). */
+  localizedText(node: DesignNode): string | undefined {
+    if (this.state.activeCulture === DEFAULT_CULTURE) return undefined;
+    return this.state.cultureStrings[isRootNode(node) ? '$this.Text' : `${node.name}.Text`];
+  }
+
+  runProject() {
+    this.send({ type: 'runProjectAction', action: 'run' });
+    this.setState({ status: 'Running project (dotnet run)…' });
   }
 
   /** Tab / Shift+Tab: moves selection along TabIndex order among siblings. */
@@ -919,6 +1171,65 @@ function syncStatusFor(
       return { status: 'Synced external edit', statusTone: 'info' };
   }
   return source === 'external' ? { status: 'Synced external edit', statusTone: 'info' } : { status: current, statusTone: 'info' };
+}
+
+type CultureFields = Pick<DesignerState, 'availableCultures' | 'activeCulture' | 'cultureStrings'>;
+
+/** Reads culture fields from a host message, keeping `fallback` values the message omits. */
+function cultureStateFrom(msg: Partial<CultureFields>, fallback: CultureFields): CultureFields {
+  const list = msg.availableCultures ?? fallback.availableCultures;
+  const availableCultures = [DEFAULT_CULTURE, ...list.filter((c) => c && c !== DEFAULT_CULTURE)];
+  const activeCulture = msg.activeCulture || fallback.activeCulture;
+  return {
+    availableCultures: activeCulture !== DEFAULT_CULTURE && !availableCultures.includes(activeCulture) ? [...availableCultures, activeCulture] : availableCultures,
+    activeCulture,
+    cultureStrings: msg.cultureStrings ?? (msg.activeCulture && msg.activeCulture !== fallback.activeCulture ? {} : fallback.cultureStrings),
+  };
+}
+
+/** Returns the name of the first inherited node that `next` removes or modifies, if any. */
+function inheritanceViolation(prev: DesignDocument, next: DesignDocument): string | null {
+  const inherited: DesignNode[] = [];
+  walkTree(prev.form, (n) => {
+    if (n.inherited) inherited.push(n);
+  });
+  prev.components.forEach((c) => c.inherited && inherited.push(c));
+  if (!inherited.length) return null;
+  const strip = (n: DesignNode) => JSON.stringify({ ...n, children: n.children.map((c) => c.id) });
+  for (const n of inherited) {
+    const m = getNode(next, n.id);
+    if (!m) return n.name;
+    if (m !== n && strip(m) !== strip(n)) return n.name;
+  }
+  return null;
+}
+
+/** Visual Studio style strip item name: "Reports" -> reportsToolStripMenuItem. */
+function stripItemNameFor(doc: DesignDocument, text: string, type: StripItemNode['type'], taken: Set<string>): string {
+  const words = text
+    .replace(/&/g, '')
+    .split(/[^A-Za-z0-9_]+/)
+    .filter(Boolean);
+  let base = words.map((w, i) => (i === 0 ? w.charAt(0).toLowerCase() + w.slice(1) : w.charAt(0).toUpperCase() + w.slice(1))).join('');
+  if (!base || /^[0-9]/.test(base)) base = `item${base}`;
+  return reserveExactOrNumberedName(doc, `${base}${type}`, taken);
+}
+
+function auditFixLabel(issue: DesignAuditIssue): string {
+  switch (issue.code) {
+    case 'high-dpi-autoscale-none':
+      return 'AutoScaleMode';
+    case 'duplicate-tab-index':
+      return `TabIndex order near ${issue.controlName}`;
+    case 'dialog-missing-accept-button':
+      return 'AcceptButton';
+    case 'dialog-missing-cancel-button':
+      return 'CancelButton';
+    case 'missing-accessible-text':
+      return `${issue.controlName}.AccessibleName`;
+    default:
+      return `${issue.controlName} range`;
+  }
 }
 
 function num(n: DesignNode, p: string): number {

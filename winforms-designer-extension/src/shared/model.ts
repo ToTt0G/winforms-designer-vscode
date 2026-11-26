@@ -171,6 +171,18 @@ export interface TreeNodeItem {
   children?: TreeNodeItem[];
 }
 
+export interface DataBindingEntry {
+  propertyName: string;
+  dataSource: string;
+  dataMember: string;
+  formattingEnabled?: boolean;
+  /** Optional 5th+ Binding constructor / DataBindings.Add arguments (e.g. DataSourceUpdateMode, nullValue, formatString) */
+  extraArgs?: string;
+  /** Preserves whether a simple identifier dataSource was qualified with `this.` or unqualified (e.g. local var) */
+  sourceQualifier?: 'this' | 'none';
+  rawExpression?: string;
+}
+
 export interface DesignNode {
   id: string;
   /** C# field/control name (e.g. "button1") or form Name */
@@ -212,6 +224,14 @@ export interface DesignNode {
   items?: string[];
   /** Tree nodes for TreeView */
   treeNodes?: TreeNodeItem[];
+  /** WinForms DataBindings entries (this.ctrl.DataBindings.Add(...)) */
+  dataBindings?: DataBindingEntry[];
+  /** True when this control is inherited from a base Form/UserControl (read-only in derived designer) */
+  inherited?: boolean;
+  /** Name of the base class this control was inherited from */
+  inheritedFrom?: string;
+  /** Root visual defaults copied from a base form for display only; omitted on save unless modified */
+  inheritedDefaultProperties?: Record<string, PropertyValue>;
   /** Unhandled raw C# statements targeting this control, preserved verbatim on save */
   rawStatements?: string[];
   /** C# field access modifier (defaults to "private") */
@@ -302,6 +322,10 @@ export interface DesignDocument {
   fileScopedNamespace: boolean;
   className: string;
   baseType: 'Form' | 'UserControl';
+  /** Custom base Form/UserControl class name when inheriting from a project base form */
+  customBaseClass?: string;
+  /** True when the form uses Localizable / culture-specific .resx resources */
+  localizable?: boolean;
   form: DesignNode;
   components: DesignNode[];
   resources: ResourceMap;

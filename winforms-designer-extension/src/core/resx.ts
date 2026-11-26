@@ -27,6 +27,13 @@ const EMPTY_RESX_TEMPLATE = `<?xml version="1.0" encoding="utf-8"?>
 `;
 
 /**
+ * Creates a clean, MSBuild-compatible empty `.resx` XML document.
+ */
+export function createEmptyResx(eol: '\r\n' | '\n' = '\n'): string {
+  return EMPTY_RESX_TEMPLATE.replace(/\n/g, eol);
+}
+
+/**
  * Parses a `.resx` XML document into a `ResourceMap`.
  * Supports `ResXFileRef` entries, string entries, and existing base64/binary entries.
  */

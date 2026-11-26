@@ -56,10 +56,10 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
       const cur = selectable.indexOf(active);
       const next = e.key === 'ArrowDown' ? selectable[(cur + 1) % selectable.length] : selectable[(cur - 1 + selectable.length) % selectable.length];
       setActive(next ?? -1);
-    } else if (e.key === 'ArrowRight' && active >= 0 && items[active].submenu) {
+    } else if (e.key === 'ArrowRight' && active >= 0 && !items[active].disabled && items[active].submenu) {
       e.preventDefault();
       setOpenSub(items[active].id);
-    } else if (e.key === 'Enter' && active >= 0) {
+    } else if (e.key === 'Enter' && active >= 0 && !items[active].disabled) {
       e.preventDefault();
       const it = items[active];
       if (it.submenu) setOpenSub(it.id);
@@ -71,7 +71,19 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
   };
 
   return (
-    <div ref={ref} className="wd-menu" role="menu" tabIndex={-1} style={{ left: pos.x, top: pos.y }} onKeyDown={onKeyDown} onContextMenu={(e) => e.preventDefault()}>
+    <div
+      ref={ref}
+      className="wd-menu"
+      role="menu"
+      tabIndex={-1}
+      style={{ left: pos.x, top: pos.y }}
+      onKeyDown={onKeyDown}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
       {items.map((it, i) =>
         it.separator ? (
           <div key={it.id} className="wd-menu-sep" role="separator" />
@@ -83,6 +95,11 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
             aria-haspopup={it.submenu ? 'menu' : undefined}
             className={`wd-menu-item ${i === active ? 'active' : ''} ${it.disabled ? 'disabled' : ''}`}
             onPointerEnter={() => {
+              if (it.disabled) {
+                setActive(-1);
+                setOpenSub(null);
+                return;
+              }
               setActive(i);
               setOpenSub(it.submenu ? it.id : null);
             }}
@@ -101,7 +118,7 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
             <span className="wd-menu-label">{it.label}</span>
             {it.shortcut ? <span className="wd-menu-shortcut">{it.shortcut}</span> : null}
             {it.submenu ? <Icon name="chevronRight" size={12} className="wd-menu-arrow" /> : null}
-            {it.submenu && openSub === it.id ? <SubMenu items={it.submenu} onClose={onClose} /> : null}
+            {!it.disabled && it.submenu && openSub === it.id ? <SubMenu items={it.submenu} onClose={onClose} /> : null}
           </div>
         )
       )}
@@ -117,7 +134,7 @@ function SubMenu({ items, onClose }: { items: MenuItem[]; onClose: () => void })
     if (r && r.right > window.innerWidth - 4) setFlip(true);
   }, []);
   return (
-    <div ref={ref} className={`wd-menu wd-submenu ${flip ? 'flip' : ''}`} role="menu" onClick={(e) => e.stopPropagation()}>
+    <div ref={ref} className={`wd-menu wd-submenu ${flip ? 'flip' : ''}`} role="menu" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
       {items.map((it) =>
         it.separator ? (
           <div key={it.id} className="wd-menu-sep" />

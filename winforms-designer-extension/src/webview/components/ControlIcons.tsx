@@ -680,6 +680,26 @@ const ICONS: Record<string, ReactNode> = {
     </>
   ),
   menu: <path d="M8 3.5h.01M8 8h.01M8 12.5h.01" strokeLinecap="round" strokeWidth="2" />,
+  link: (
+    <>
+      <path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2.1-2.1a2.6 2.6 0 0 0-3.7-3.7l-.7.7" />
+      <path d="M9.2 6.8a2.6 2.6 0 0 0-3.7 0L3.4 8.9a2.6 2.6 0 0 0 3.7 3.7l.7-.7" />
+    </>
+  ),
+  play: <path d="M5 3.2v9.6L12.6 8z" fill="currentColor" strokeLinejoin="round" />,
+  globe: (
+    <>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M2.5 8h11M8 2.5c1.6 1.6 2.3 3.4 2.3 5.5S9.6 11.9 8 13.5M8 2.5C6.4 4.1 5.7 5.9 5.7 8s.7 3.9 2.3 5.5" />
+    </>
+  ),
+  wand: (
+    <>
+      <path d="m3 13 7.5-7.5M9.5 4.5l2 2" />
+      <path d="M12 1.8v1.6M12.8 2.6h-1.6M14 5.6v1.2M14.6 6.2h-1.2M7 1.8v1.2M7.6 2.4H6.4" />
+    </>
+  ),
+  inherited: <path d="M4 3.5v5a2 2 0 0 0 2 2h6M9.5 8l2.5 2.5L9.5 13" strokeLinejoin="round" />,
 };
 
 const CONTROL_ALIASES: Record<string, string> = {

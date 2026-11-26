@@ -49,6 +49,7 @@ export type PropertyEditorKind =
   | 'stripItemsCollection'
   | 'tabPagesCollection'
   | 'tableLayoutCollection'
+  | 'dataBindingsCollection'
   | 'controlRef'
   | 'name';
 
@@ -566,6 +567,7 @@ export const COMMON_CONTROL_PROPERTIES: PropertyDefinition[] = [
   { name: 'RightToLeft', category: 'Appearance', editor: 'enum', enumType: 'RightToLeft', defaultValue: { kind: 'enum', typeName: 'RightToLeft', value: 'No' }, description: 'Indicates whether the component should draw right-to-left for RTL languages.' },
   { name: 'Cursor', category: 'Appearance', editor: 'enum', enumType: 'Cursors', defaultValue: { kind: 'enum', typeName: 'Cursors', value: 'Default' }, description: 'The cursor that appears when the pointer moves over the control.' },
   { name: 'ContextMenuStrip', category: 'Behavior', editor: 'controlRef', controlRefTypes: ['ContextMenuStrip'], description: 'The shortcut menu associated with the control.' },
+  { name: 'DataBindings', category: 'Data', editor: 'dataBindingsCollection', description: 'Data bindings connecting control properties to a data source.' },
   { name: 'Tag', category: 'Data', editor: 'string', defaultValue: '', description: 'User-defined data associated with the object.' },
   { name: 'AccessibleName', category: 'Accessibility', editor: 'string', defaultValue: '', description: 'The name of the control used by accessibility client applications.' },
 ];
@@ -628,6 +630,7 @@ export const FORM_PROPERTIES: PropertyDefinition[] = [
   { name: 'AcceptButton', category: 'Misc', editor: 'controlRef', controlRefTypes: ['Button'], description: 'The button clicked automatically when the user presses Enter.' },
   { name: 'CancelButton', category: 'Misc', editor: 'controlRef', controlRefTypes: ['Button'], description: 'The button clicked automatically when the user presses Escape.' },
   { name: 'MainMenuStrip', category: 'Misc', editor: 'controlRef', controlRefTypes: ['MenuStrip'], description: 'The primary MenuStrip container for the form.' },
+  { name: 'Localizable', category: 'Design', editor: 'boolean', defaultValue: false, description: 'Indicates whether this form supports culture-specific .resx localization files.' },
   { name: 'RightToLeft', category: 'Appearance', editor: 'enum', enumType: 'RightToLeft', defaultValue: { kind: 'enum', typeName: 'RightToLeft', value: 'No' }, description: 'Indicates whether the form draws right-to-left.' },
 ];
 

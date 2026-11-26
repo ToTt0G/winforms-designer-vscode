@@ -23,21 +23,22 @@ export function frameMetrics(root: DesignNode, style: 'fluent' | 'classic'): Fra
 }
 
 function CaptionButton({ kind, disabled, style }: { kind: 'min' | 'max' | 'close'; disabled?: boolean; style: 'fluent' | 'classic' }) {
-  const glyph =
-    kind === 'min' ? (
-      <path d="M2 6.5h8" />
-    ) : kind === 'max' ? (
-      style === 'fluent' ? (
-        <rect x="2.5" y="2.5" width="7" height="7" rx="1" />
-      ) : (
-        <path d="M2.5 2.5h7v7h-7zM2.5 3.5h7" />
-      )
-    ) : (
-      <path d="m2.5 2.5 7 7M9.5 2.5l-7 7" />
+  if (style === 'classic') {
+    // Marlett-style classic glyphs on raised 3D buttons.
+    const glyph = kind === 'min' ? <path d="M1 6h6v2H1z" /> : kind === 'max' ? <path d="M0 0h9v8H0zM1 2v5h7V2z" fillRule="evenodd" /> : <path d="M0 0h2l2.5 2.5L7 0h2L5.5 3.5 9 7H7L4.5 4.5 2 7H0l3.5-3.5z" />;
+    return (
+      <span className={`wf-cap-btn ${kind} ${disabled ? 'disabled' : ''}`}>
+        <svg width="9" height={kind === 'min' ? 8 : kind === 'max' ? 8 : 7} viewBox={`0 0 9 ${kind === 'close' ? 7 : 8}`} fill="currentColor" aria-hidden>
+          {glyph}
+        </svg>
+      </span>
     );
+  }
+  // Segoe MDL2 Assets caption glyphs: 10×10, 1px hairlines.
+  const glyph = kind === 'min' ? <path d="M0 5.5h10" /> : kind === 'max' ? <rect x="0.5" y="0.5" width="9" height="9" /> : <path d="M0 0l10 10M10 0 0 10" />;
   return (
     <span className={`wf-cap-btn ${kind} ${disabled ? 'disabled' : ''}`}>
-      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={style === 'fluent' ? 1 : 1.6}>
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth={kind === 'close' ? 1.1 : 1} shapeRendering={kind === 'close' ? undefined : 'crispEdges'} aria-hidden>
         {glyph}
       </svg>
     </span>
@@ -61,8 +62,11 @@ export function FormChrome({
   resourceDataUris,
   children,
   onCaptionPointerDown,
+  titleOverride,
 }: {
   root: DesignNode;
+  /** Localized caption for the active culture (falls back to the Form's Text). */
+  titleOverride?: string;
   style: 'fluent' | 'classic';
   resourceDataUris: Record<string, string>;
   children: ReactNode;
@@ -81,11 +85,11 @@ export function FormChrome({
   const maxBox = getBool(root, 'MaximizeBox', true);
   const showIcon = getBool(root, 'ShowIcon', true) && controlBox && !m.tool && bs !== 'FixedDialog';
   const icon = resolveImage(root, 'Icon', resourceDataUris);
-  const title = displayText(getText(root));
+  const title = displayText(titleOverride ?? getText(root));
   const opacity = Math.max(0.15, Math.min(1, getNumber(root, 'Opacity', 1)));
   const showMinMax = controlBox && !m.tool && (minBox || maxBox);
   return (
-    <div className={`wf-frame wf-${style} ${m.tool ? 'wf-tool' : ''}`} style={{ opacity, borderWidth: m.border }}>
+    <div className={`wf-frame wf-${style} ${m.tool ? 'wf-tool' : ''}`} style={{ opacity, borderWidth: m.border, ['--wf-bw' as string]: `${m.border}px` }}>
       <div className="wf-caption" style={{ height: m.caption }} onPointerDown={onCaptionPointerDown} data-form-caption="true">
         {showIcon ? <span className="wf-cap-icon">{icon ? <img src={icon} alt="" width={16} height={16} draggable={false} /> : <DefaultFormIcon />}</span> : null}
         <span className="wf-cap-title">{title}</span>

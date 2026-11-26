@@ -236,4 +236,40 @@ partial class RangeIssuesForm
       issues.some((i) => i.code === 'split-container-distance' && i.controlName === 'splitBad' && i.severity === 'error')
     );
   });
+
+  it('flags high-dpi-autoscale-none warning for Form with AutoScaleMode.None only', () => {
+    const noneSrc = `namespace AuditApp;
+
+partial class FixedDpiForm
+{
+    #region Windows Form Designer generated code
+    private void InitializeComponent()
+    {
+        this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.None;
+        this.ClientSize = new System.Drawing.Size(400, 300);
+        this.Name = "FixedDpiForm";
+    }
+    #endregion
+}
+`;
+    const noneIssues = auditDesignDocument(parseDesignerCs(noneSrc));
+    const dpiWarnings = noneIssues.filter((i) => i.code === 'high-dpi-autoscale-none');
+    assert.equal(dpiWarnings.length, 1);
+    assert.equal(dpiWarnings[0].severity, 'warning');
+    assert.equal(dpiWarnings[0].controlName, 'FixedDpiForm');
+
+    const fontSrc = noneSrc.replace('AutoScaleMode.None', 'AutoScaleMode.Font');
+    assert.equal(
+      auditDesignDocument(parseDesignerCs(fontSrc)).filter(
+        (i) => i.code === 'high-dpi-autoscale-none'
+      ).length,
+      0
+    );
+
+    const ucDoc = parseDesignerCs(noneSrc, { baseType: 'UserControl' });
+    assert.equal(
+      auditDesignDocument(ucDoc).filter((i) => i.code === 'high-dpi-autoscale-none').length,
+      0
+    );
+  });
 });

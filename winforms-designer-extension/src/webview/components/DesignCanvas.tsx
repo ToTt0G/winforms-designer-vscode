@@ -10,14 +10,13 @@ import {
   findNode,
   getNode,
   isMovable,
-  newStripItem,
   reparentNodes,
   setNodeRect,
   setProps,
-  setStripItems,
   topLevelIds,
   updateNode,
   updateNodes,
+  DEFAULT_CULTURE,
   type DesignerState,
   type DesignerStore,
   type InsertTarget,
@@ -35,10 +34,10 @@ import {
   type Snapline,
   type SnapTarget,
 } from '../state/layoutEngine';
-import { baselineOffset, clampSize, displayText, getDock, getEnum, getFont, getLocation, getNumber, getSize, getText, isRootNode } from '../state/nodeProps';
+import { baselineOffset, clampSize, displayText, getDock, getEnum, getFont, getLocation, getNumber, getSize, isRootNode } from '../state/nodeProps';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { Icon } from './ControlIcons';
-import { FormClient, formSurfaceStyle, type RenderContext } from './ControlRenderer';
+import { FormClient, formSurfaceStyle, localizedText, type RenderContext, type StripEditContext } from './ControlRenderer';
 import { FormChrome, frameMetrics } from './FormChrome';
 import { SmartTagPanel } from './SmartTag';
 
@@ -62,7 +61,7 @@ interface MoveItem {
 }
 
 type Gesture =
-  | { kind: 'move'; pointerId: number; sx: number; sy: number; started: boolean; items: MoveItem[]; primaryId: string; parentId: string; slot: string; target?: DropTarget; fdx: number; fdy: number; clickId: string; wasSelected: boolean; additive: boolean }
+  | { kind: 'move'; pointerId: number; sx: number; sy: number; started: boolean; items: MoveItem[]; primaryId: string; parentId: string; slot: string; target?: DropTarget; fdx: number; fdy: number; clickId: string; wasSelected: boolean; additive: boolean; copy: boolean; deferToggle: boolean }
   | { kind: 'resize'; pointerId: number; sx: number; sy: number; started: boolean; handle: Handle; items: MoveItem[]; primaryId: string }
   | { kind: 'formResize'; pointerId: number; sx: number; sy: number; started: boolean; handle: 'e' | 's' | 'se'; size: { width: number; height: number } }
   | { kind: 'splitter'; pointerId: number; sx: number; sy: number; started: boolean; nodeId: string; dist: number; vertical: boolean; extent: number; sw: number; min1: number; min2: number }
@@ -78,6 +77,14 @@ interface Overlay {
   tip: { x: number; y: number; text: string } | null;
 }
 
+/** Ctrl+drag copies only non-docked, non-inherited controls. */
+function canCopyItems(doc: DesignDocument, ids: string[]): boolean {
+  return ids.some((id) => {
+    const n = getNode(doc, id);
+    return !!n && !n.inherited && !n.isComponent && getDock(n) === 'None';
+  });
+}
+
 const EMPTY_OVERLAY: Overlay = { lines: [], drop: null, marquee: null, ghosts: [], tip: null };
 
 function normRect(x1: number, y1: number, x2: number, y2: number): Rect {
@@ -85,7 +92,7 @@ function normRect(x1: number, y1: number, x2: number, y2: number): Rect {
 }
 
 function allowedHandles(doc: DesignDocument, node: DesignNode, locked: boolean): Set<Handle> {
-  if (locked || isRootNode(node)) return new Set();
+  if (locked || isRootNode(node) || node.inherited) return new Set();
   const f = findNode(doc, node.id);
   if (f?.parent?.type === 'TabControl') return new Set();
   switch (getDock(node)) {
@@ -162,6 +169,8 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [viewport, setViewport] = useState({ width: 800, height: 600 });
   const [dragging, setDragging] = useState<Gesture['kind'] | null>(null);
+  const [copyMode, setCopyMode] = useState(false);
+  const [stripEdit, setStripEdit] = useState<StripEditContext['editing']>(null);
 
   const style = settings.renderStyle;
   const fm = frameMetrics(root, style);
@@ -337,6 +346,11 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
 
       switch (g.kind) {
         case 'move': {
+          const copy = (e.ctrlKey || e.metaKey) && canCopyItems(d, g.items.map((i) => i.id));
+          if (copy !== g.copy) {
+            g.copy = copy;
+            setCopyMode(copy);
+          }
           const exclude = new Set(g.items.map((i) => i.id));
           const target = findDropTarget(e.clientX, e.clientY, exclude);
           g.target = target;
@@ -366,8 +380,9 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
           g.fdx = Math.round(dx + sdx);
           g.fdy = Math.round(dy + sdy);
           const movable = g.items.filter((i) => i.movable);
+          // Ctrl+drag copies: the originals stay put while the ghosts preview the drop position.
           store.updateGesture((base) =>
-            updateNodes(base, movable.map((i) => i.id), (n) => {
+            g.copy ? base : updateNodes(base, movable.map((i) => i.id), (n) => {
               const it = movable.find((m) => m.id === n.id)!;
               return setNodeRect(n, { x: it.loc.x + g.fdx, y: it.loc.y + g.fdy });
             })
@@ -532,6 +547,7 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       lastMoveRef.current = null;
       setOverlay(EMPTY_OVERLAY);
       setDragging(null);
+      setCopyMode(false);
       if (!g) return;
       if (g.kind === 'pan') {
         setCursor(spaceRef.current ? 'grab' : undefined);
@@ -546,7 +562,8 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       switch (g.kind) {
         case 'move': {
           if (!g.started) {
-            if (!g.additive && g.wasSelected) {
+            if (g.deferToggle) store.select([g.clickId], 'toggle');
+            else if (!g.additive && g.wasSelected) {
               if (st.selection.length > 1) store.setPrimary(g.clickId);
               else store.select([g.clickId]);
             }
@@ -555,6 +572,54 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
           const target = g.target;
           const tnode = target ? getNode(d, target.containerId) : undefined;
           const managedTarget = tnode?.type === 'FlowLayoutPanel' || tnode?.type === 'TableLayoutPanel';
+          if (g.copy) {
+            // Ctrl+drag: drop clones (fresh names) at the ghost position; originals are untouched.
+            store.cancelGesture();
+            const p = toDesign(e.clientX, e.clientY);
+            const copyIds = g.items.map((i) => i.id).filter((id) => canCopyItems(d, [id]));
+            const reparenting = !!target && !!tnode && (target.containerId !== g.parentId || target.slot !== g.slot);
+            const destId = reparenting ? target!.containerId : g.parentId;
+            const destSlot = reparenting ? target!.slot : g.slot;
+            const slot = slotOf(destId, destSlot as DropTarget['slot']);
+            const destNode = getNode(d, destId);
+            const destLayout = st.layout.get(destId);
+            const managed = destNode?.type === 'FlowLayoutPanel' || destNode?.type === 'TableLayoutPanel';
+            let locations: Record<string, { x: number; y: number }> | null = null;
+            let cell: InsertTarget['cell'];
+            let index: number | undefined;
+            if (!managed) {
+              locations = {};
+              for (const it of g.items) {
+                locations[it.id] = reparenting
+                  ? { x: Math.round(it.abs.x + g.fdx - (slot?.origin.x ?? 0)), y: Math.round(it.abs.y + g.fdy - (slot?.origin.y ?? 0)) }
+                  : { x: it.loc.x + g.fdx, y: it.loc.y + g.fdy };
+              }
+            } else if (destNode?.type === 'TableLayoutPanel' && destLayout) {
+              const hitCell = tableCellAtPoint(destLayout, p.x, p.y);
+              const occupied =
+                hitCell &&
+                destNode.children.some((c) => {
+                  const cl = st.layout.get(c.id);
+                  return cl?.cell && cl.cell.column === hitCell.column && cl.cell.row === hitCell.row;
+                });
+              if (hitCell && !occupied) {
+                cell = { ...hitCell, explicit: true };
+              }
+            } else if (destNode?.type === 'FlowLayoutPanel') {
+              index = flowInsertIndex(destNode, destNode.children, p, st.layout);
+            }
+            store.cloneNodesTo(
+              copyIds,
+              {
+                parentId: destId,
+                slot: destSlot === 'main' ? undefined : (destSlot as 'Panel1' | 'Panel2'),
+                cell,
+                index,
+              },
+              locations
+            );
+            break;
+          }
           if (target && tnode && (target.containerId !== g.parentId || target.slot !== g.slot || managedTarget)) {
             const p = toDesign(e.clientX, e.clientY);
             const ids = g.items.map((i) => i.id);
@@ -654,7 +719,20 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       const g = gestureRef.current;
       if (g && e.pointerId === g.pointerId) finishGesture(e, true);
     };
+    const modKey = (e: KeyboardEvent) => {
+      const g = gestureRef.current;
+      if (!g || g.kind !== 'move' || !g.started || (e.key !== 'Control' && e.key !== 'Meta')) return;
+      const st = store.getState();
+      const copy = e.type === 'keydown' && canCopyItems(st.doc!, g.items.map((i) => i.id));
+      if (copy === g.copy) return;
+      g.copy = copy;
+      setCopyMode(copy);
+      // Re-run the last pointer position so the originals snap back (copy) or follow (move) immediately.
+      const last = lastMoveRef.current;
+      if (last) processMove(new PointerEvent('pointermove', { clientX: last.clientX, clientY: last.clientY, ctrlKey: copy, metaKey: false, altKey: last.altKey, pointerId: g.pointerId }));
+    };
     const key = (e: KeyboardEvent) => {
+      modKey(e);
       if (e.key === 'Escape' && gestureRef.current) {
         e.stopPropagation();
         finishGesture(new PointerEvent('pointerup'), true);
@@ -664,13 +742,15 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', cancel);
     window.addEventListener('keydown', key, true);
+    window.addEventListener('keyup', modKey, true);
     return () => {
+      window.removeEventListener('keyup', modKey, true);
       window.removeEventListener('pointermove', onWindowMove);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', cancel);
       window.removeEventListener('keydown', key, true);
     };
-  }, [finishGesture, onWindowMove]);
+  }, [finishGesture, onWindowMove, processMove, store]);
 
   useEffect(
     () => () => {
@@ -755,17 +835,25 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
 
   const onTabClick = useCallback((tabControlId: string, index: number) => store.setActiveTab(tabControlId, index), [store]);
 
-  const quickAddStripItem = (nodeId: string) => {
-    const type0 = getNode(store.getState().doc!, nodeId)?.type;
-    if (!type0) return;
-    const type = type0 === 'MenuStrip' || type0 === 'ContextMenuStrip' ? 'ToolStripMenuItem' : type0 === 'StatusStrip' ? 'ToolStripStatusLabel' : 'ToolStripButton';
-    const d = store.getState().doc!;
-    const n = getNode(d, nodeId)!;
-    const item = newStripItem(d, type);
-    store.update((doc2) => setStripItems(doc2, nodeId, [...(getNode(doc2, nodeId)?.stripItems ?? n.stripItems ?? []), item]), `Add ${item.name}`, { selection: [nodeId] });
-  };
+  const stripEditable = !state.readOnly && !state.locked && !state.tabOrderMode;
+  const onStripCommit = useCallback(
+    (stripId: string, itemId: string | null, text: string | null) => {
+      setStripEdit(null);
+      scrollerRef.current?.focus({ preventScroll: true });
+      if (text === null) return;
+      if (itemId === null) {
+        if (text.trim()) store.addStripItem(stripId, text.trim());
+      } else store.renameStripItem(stripId, itemId, text);
+    },
+    [store]
+  );
+  useEffect(() => {
+    if (!stripEditable) setStripEdit(null);
+  }, [stripEditable]);
 
   const onSurfacePointerDown = (e: React.PointerEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('.wd-menu')) return;
     const st = store.getState();
     const d = st.doc!;
     setMenu(null);
@@ -777,8 +865,7 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       return;
     }
     if (e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    if (target.closest('.wd-inline-edit, .wd-smarttag, .wd-handle, .wd-form-handle')) return;
+    if (target.closest('.wd-inline-edit, .wd-smarttag, .wd-handle, .wd-form-handle, .wf-strip-input')) return;
     const addTab = target.closest<HTMLElement>('[data-add-tab]');
     const frozen = st.locked || st.readOnly;
     if (addTab && !frozen) {
@@ -786,10 +873,19 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       store.addTabPage(addTab.dataset.addTab!);
       return;
     }
-    const stripAdd = target.closest<HTMLElement>('[data-strip-add]');
-    if (stripAdd && !frozen) {
+    const stripDel = target.closest<HTMLElement>('[data-strip-del]');
+    if (stripDel && !frozen && !st.tabOrderMode) {
       e.preventDefault();
-      quickAddStripItem(stripAdd.dataset.stripAdd!);
+      e.stopPropagation();
+      store.removeStripItem(stripDel.dataset.stripOwner!, stripDel.dataset.stripDel!);
+      return;
+    }
+    const stripAdd = target.closest<HTMLElement>('[data-strip-add]');
+    if (stripAdd && !frozen && !st.tabOrderMode) {
+      e.preventDefault();
+      const stripId = stripAdd.dataset.stripAdd!;
+      if (!st.selection.includes(stripId)) store.select([stripId]);
+      setStripEdit({ stripId, itemId: null });
       return;
     }
     const p = toDesign(e.clientX, e.clientY);
@@ -823,11 +919,13 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
     scrollerRef.current?.focus({ preventScroll: true });
     const additive = e.ctrlKey || e.metaKey || e.shiftKey;
     const wasSelected = st.selection.includes(hit.id);
-    const movable = !frozen && !isRootNode(hit) && isMovable(d, hit.id, st.layout);
+    const movable = !frozen && !isRootNode(hit) && !hit.inherited && isMovable(d, hit.id, st.layout);
     const parent = findNode(d, hit.id)?.parent;
-    const managed = !!parent && (parent.type === 'FlowLayoutPanel' || parent.type === 'TableLayoutPanel') && !frozen;
+    const managed = !!parent && (parent.type === 'FlowLayoutPanel' || parent.type === 'TableLayoutPanel') && !frozen && !hit.inherited;
     const container = isRootNode(hit) || (isContainerNode(hit) && !movable && !managed);
-    if (additive) {
+    // Ctrl+drag on a control copies it (Visual Studio muscle memory); a plain Ctrl+click still toggles.
+    const copyCandidate = (e.ctrlKey || e.metaKey) && !e.shiftKey && !container && (movable || managed);
+    if (additive && !copyCandidate) {
       if (!isRootNode(hit)) store.select([hit.id], 'toggle');
       if (container && isRootNode(hit)) {
         gestureRef.current = { kind: 'marquee', pointerId: e.pointerId, sx: p.x, sy: p.y, started: false, containerId: hit.id, slot: 'main', base: st.selection };
@@ -847,11 +945,13 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       gestureRef.current = { kind: 'marquee', pointerId: e.pointerId, sx: p.x, sy: p.y, started: false, containerId, slot, base: [] };
       return;
     }
-    if (!wasSelected) store.select([hit.id]);
-    const sel = wasSelected ? store.getState().selection : [hit.id];
+    if (copyCandidate) {
+      if (!wasSelected) store.select([hit.id], 'add');
+    } else if (!wasSelected) store.select([hit.id]);
+    const sel = wasSelected || copyCandidate ? store.getState().selection : [hit.id];
     const ids = topLevelIds(d, sel).filter((id) => {
       const n = getNode(d, id);
-      if (!n || n.isComponent || isRootNode(n)) return false;
+      if (!n || n.isComponent || isRootNode(n) || n.inherited) return false;
       const pf = findNode(d, id)?.parent;
       return isMovable(d, id, st.layout) || (!!pf && (pf.type === 'FlowLayoutPanel' || pf.type === 'TableLayoutPanel'));
     });
@@ -874,6 +974,8 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       clickId: hit.id,
       wasSelected,
       additive,
+      copy: false,
+      deferToggle: copyCandidate && wasSelected,
       items: ids.map((id) => {
         const n = getNode(d, id)!;
         return { id, abs: st.layout.get(id)!.bounds, loc: getLocation(n), size: getSize(n), movable: isMovable(d, id, st.layout) };
@@ -893,8 +995,17 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
     const st = store.getState();
     if (st.tabOrderMode || st.placementTool) return;
     const target = e.target as HTMLElement;
-    if (target.closest('[data-tab-index], [data-add-tab], [data-strip-add], .wd-handle, .wd-form-handle, .wd-inline-edit, .wd-smarttag')) return;
+    if (target.closest('[data-tab-index], [data-add-tab], [data-strip-add], [data-strip-del], .wf-strip-input, .wd-handle, .wd-form-handle, .wd-inline-edit, .wd-smarttag')) return;
     if (!clientRef.current?.contains(target) && !target.closest('[data-form-caption]')) return;
+    const stripItem = target.closest<HTMLElement>('[data-strip-item][data-strip-owner]');
+    if (stripItem && !st.readOnly && !st.locked) {
+      const owner = getNode(st.doc!, stripItem.dataset.stripOwner!);
+      if (owner && !owner.inherited) {
+        e.preventDefault();
+        setStripEdit({ stripId: owner.id, itemId: stripItem.dataset.stripItem! });
+        return;
+      }
+    }
     const nodeEl = clientRef.current?.contains(target) ? target.closest<HTMLElement>('[data-node-id]') : null;
     const id = nodeEl?.dataset.nodeId ?? st.doc!.form.id;
     store.navigateToDefaultEvent(id);
@@ -977,9 +1088,13 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       locked: state.locked || state.readOnly,
       onTabClick,
       onSplitterPointerDown,
+      cultureStrings: state.activeCulture !== DEFAULT_CULTURE ? state.cultureStrings : undefined,
+      resources: doc.resources,
+      strip: stripEditable ? { editing: stripEdit, onCommit: onStripCommit } : undefined,
     }),
-    [layout, style, state.resourceDataUris, state.locked, state.readOnly, onTabClick, onSplitterPointerDown]
+    [layout, style, state.resourceDataUris, state.locked, state.readOnly, onTabClick, onSplitterPointerDown, state.activeCulture, state.cultureStrings, doc.resources, stripEditable, stripEdit, onStripCommit]
   );
+  const cultureStrings = ctx.cultureStrings;
 
   const artW = Math.max(viewport.width, frameW * zoom + PAD * 2 + 120);
   const artH = Math.max(viewport.height, frameH * zoom + PAD * 2 + 120);
@@ -998,7 +1113,7 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
   const menuItems = (): MenuItem[] => {
     const multi = selected.length >= 2;
     const hasCtl = state.selection.some((id) => id !== root.id);
-    const frozen = state.locked || state.readOnly;
+    const frozen = state.locked || state.readOnly || selected.some((n) => n.inherited);
     return [
       { id: 'code', label: 'View Code', icon: 'code', shortcut: 'F7', onSelect: () => store.post({ type: 'viewCode' }) },
       { id: 's0', separator: true },
@@ -1069,7 +1184,7 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
       <div className="wd-artboard" style={{ width: artW, height: artH }}>
         <div className="wd-form-host" style={{ left: PAD, top: PAD, width: frameW * z, height: frameH * z }}>
           <div className="wd-form-scale" style={{ width: frameW, height: frameH, transform: `scale(${z})` }}>
-            <FormChrome root={root} style={style} resourceDataUris={state.resourceDataUris}>
+            <FormChrome root={root} style={style} resourceDataUris={state.resourceDataUris} titleOverride={localizedText(root, cultureStrings, doc.resources)}>
               <div
                 ref={clientRef}
                 className={`wf-client wf-${style}`}
@@ -1113,7 +1228,7 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
               const nl = layout.get(n.id);
               if (!nl || nl.hidden) return null;
               const isPrimary = i === 0;
-              const frozen = state.locked || state.readOnly;
+              const frozen = state.locked || state.readOnly || !!n.inherited;
               const allowed = allowedHandles(doc, n, frozen);
               return (
                 <div key={n.id} className={`wd-sel ${isPrimary ? 'primary' : 'secondary'} ${frozen ? 'locked' : ''}`} style={sc(nl.bounds)}>
@@ -1136,8 +1251,18 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
             })}
 
           {overlay.ghosts.map((r, i) => (
-            <div key={`g${i}`} className="wd-ghost" style={sc(r)} />
+            <div key={`g${i}`} className={`wd-ghost ${copyMode ? 'copy' : ''}`} style={sc(r)} />
           ))}
+          {copyMode && overlay.ghosts.length ? (
+            <div
+              className="wd-copy-badge"
+              data-testid="drag-copy-badge"
+              title="Release to copy (Ctrl)"
+              style={{ left: (overlay.ghosts[0].x + overlay.ghosts[0].width) * z - 7, top: overlay.ghosts[0].y * z - 9 }}
+            >
+              +
+            </div>
+          ) : null}
 
           {overlay.drop || toolboxDrop ? (
             <div className="wd-drop-target" style={sc((overlay.drop ?? toolboxDrop)!.rect)}>
@@ -1215,11 +1340,12 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
             <InlineEditor
               key={inlineNode.id}
               node={inlineNode}
+              initial={localizedText(inlineNode, cultureStrings, doc.resources)}
               style={sc(inlineLayout.bounds)}
               zoom={z}
               onCommit={(v) => {
                 store.setState({ inlineEditId: null });
-                if (v !== getText(inlineNode)) store.setProperty([inlineNode.id], 'Text', v);
+                if (v !== localizedText(inlineNode, cultureStrings, doc.resources)) store.setProperty([inlineNode.id], 'Text', v);
               }}
               onCancel={() => store.setState({ inlineEditId: null })}
             />
@@ -1252,6 +1378,11 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
           ) : null}
           <div className="wd-form-size" style={{ left: 0, top: clientSize.height * z + fm.border * z + 8 }}>
             {root.name} <span>{clientSize.width} × {clientSize.height}</span>
+            {state.activeCulture !== DEFAULT_CULTURE ? (
+              <em className="wd-culture-pill" title={`Showing localized resources for ${state.activeCulture}`} data-testid="canvas-culture-pill">
+                {state.activeCulture}
+              </em>
+            ) : null}
           </div>
         </div>
       </div>
@@ -1264,18 +1395,20 @@ export function DesignCanvas({ state, store }: { state: DesignerState; store: De
 
 function InlineEditor({
   node,
+  initial,
   style,
   zoom,
   onCommit,
   onCancel,
 }: {
   node: DesignNode;
+  initial: string;
   style: CSSProperties;
   zoom: number;
   onCommit: (v: string) => void;
   onCancel: () => void;
 }) {
-  const [value, setValue] = useState(getText(node));
+  const [value, setValue] = useState(initial);
   const ref = useRef<HTMLTextAreaElement>(null);
   const done = useRef(false);
   useEffect(() => {

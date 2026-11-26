@@ -765,4 +765,96 @@ partial class TrailingForm
     assert.ok(snapshotIdx > textAssignIdx, 'Trailing statement must stay after button1.Text assignment');
     assert.ok(snapshotIdx < resumeIdx, 'Trailing statement must appear before ResumeLayout');
   });
+
+  it('never emits Localizable into C# and never emits inherited controls while still detecting derived collisions', () => {
+    const src = `namespace InheritApp;
+
+partial class ChildForm
+{
+    #region Windows Form Designer generated code
+    private void InitializeComponent()
+    {
+        this.btnChild = new System.Windows.Forms.Button();
+        this.SuspendLayout();
+        this.btnChild.Location = new System.Drawing.Point(20, 100);
+        this.btnChild.Name = "btnChild";
+        this.btnChild.Size = new System.Drawing.Size(90, 28);
+        this.btnChild.Text = "Child";
+        this.ClientSize = new System.Drawing.Size(500, 350);
+        this.Controls.Add(this.btnChild);
+        this.Name = "ChildForm";
+        this.Text = "Child";
+        this.ResumeLayout(false);
+    }
+    #endregion
+
+    private System.Windows.Forms.Button btnChild;
+}
+`;
+    const doc = parseDesignerCs(src);
+    doc.form.properties.Localizable = true;
+    doc.form.children.unshift({
+      id: 'panelBaseHeader',
+      name: 'panelBaseHeader',
+      type: 'Panel',
+      fullTypeName: 'System.Windows.Forms.Panel',
+      inherited: true,
+      inheritedFrom: 'BaseDialogForm',
+      properties: {
+        Location: { kind: 'point', x: 0, y: 0 },
+        Name: 'panelBaseHeader',
+        Size: { kind: 'size', width: 500, height: 60 },
+      },
+      events: {},
+      children: [
+        {
+          id: 'lblBaseTitle',
+          name: 'lblBaseTitle',
+          type: 'Label',
+          fullTypeName: 'System.Windows.Forms.Label',
+          inherited: true,
+          inheritedFrom: 'BaseDialogForm',
+          properties: { Name: 'lblBaseTitle', Text: 'Base Header' },
+          events: {},
+          children: [],
+        },
+      ],
+    });
+    doc.components.unshift({
+      id: 'baseToolTip',
+      name: 'baseToolTip',
+      type: 'ToolTip',
+      fullTypeName: 'System.Windows.Forms.ToolTip',
+      isComponent: true,
+      inherited: true,
+      inheritedFrom: 'BaseDialogForm',
+      properties: {},
+      events: {},
+      children: [],
+    });
+
+    const generated = generateDesignerCs(doc);
+    assert.ok(!generated.includes('Localizable'), 'Localizable must never be emitted to C#');
+    assert.ok(!generated.includes('panelBaseHeader'), 'Inherited panel must not be emitted');
+    assert.ok(!generated.includes('lblBaseTitle'), 'Inherited child label must not be emitted');
+    assert.ok(!generated.includes('baseToolTip'), 'Inherited component must not be emitted');
+    assert.ok(generated.includes('this.btnChild = new System.Windows.Forms.Button();'));
+    assert.ok(generated.includes('this.Controls.Add(this.btnChild);'));
+
+    // Derived control colliding with an inherited field name MUST still throw
+    const colliding = structuredClone(doc);
+    colliding.form.children.push({
+      id: 'dupBase',
+      name: 'lblBaseTitle',
+      type: 'Label',
+      fullTypeName: 'System.Windows.Forms.Label',
+      properties: { Name: 'lblBaseTitle', Text: 'Collision' },
+      events: {},
+      children: [],
+    });
+    assert.throws(
+      () => generateDesignerCs(colliding),
+      /Duplicate control\/field name detected: "lblBaseTitle"/
+    );
+  });
 });

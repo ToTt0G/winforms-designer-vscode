@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DesignAuditIssue, AuditRuleCode } from '../../shared/auditor';
 import type { AlignOp, DesignerState, DesignerStore } from '../state/designerStore';
-import { labelForAlign } from '../state/designerStore';
+import { canFixAuditIssue, DEFAULT_CULTURE, labelForAlign } from '../state/designerStore';
 import { getSize } from '../state/nodeProps';
 import { Popover } from './ContextMenu';
 import { Icon } from './ControlIcons';
@@ -58,7 +58,11 @@ const AUDIT_RULE_LABELS: Record<AuditRuleCode, string> = {
   'numeric-updown-range': 'NumericUpDown range',
   'progress-bar-range': 'ProgressBar range',
   'split-container-distance': 'SplitterDistance',
+  'high-dpi-autoscale-none': 'High-DPI scaling disabled',
 };
+
+const COMMON_CULTURES = ['de', 'fr', 'es', 'it', 'ja', 'ko', 'pt-BR', 'zh-Hans', 'zh-Hant', 'ru', 'nl', 'pl'];
+const ADD_CULTURE = '__add__';
 
 const SEVERITY_ORDER = { error: 0, warning: 1, info: 2 } as const;
 
@@ -70,15 +74,39 @@ export function revealOnCanvas(nodeId: string) {
   });
 }
 
-function AuditPopover({ issues, anchor, onClose, onPick }: { issues: DesignAuditIssue[]; anchor: Anchor; onClose: () => void; onPick: (issue: DesignAuditIssue) => void }) {
+function AuditPopover({
+  issues,
+  anchor,
+  onClose,
+  onPick,
+  canFix,
+  onFix,
+  onFixAll,
+}: {
+  issues: DesignAuditIssue[];
+  anchor: Anchor;
+  onClose: () => void;
+  onPick: (issue: DesignAuditIssue) => void;
+  canFix: (issue: DesignAuditIssue) => boolean;
+  onFix: (issue: DesignAuditIssue) => void;
+  onFixAll: () => void;
+}) {
   const sorted = [...issues].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.controlName.localeCompare(b.controlName));
   const counts = { error: 0, warning: 0, info: 0 };
   issues.forEach((i) => counts[i.severity]++);
+  const fixable = sorted.map(canFix);
+  const fixableCount = fixable.filter(Boolean).length;
   return (
     <Popover anchor={anchor} onClose={onClose} className="wd-audit-popover">
       <div className="wd-audit-head">
         <Icon name={issues.length ? 'shieldAlert' : 'shieldCheck'} size={14} />
         <span className="wd-pop-title">Layout &amp; Accessibility Audit</span>
+        {fixableCount >= 2 ? (
+          <button type="button" className="wd-audit-fixall" onClick={onFixAll} title={`Apply ${fixableCount} automatic fixes as one undo step`} data-testid="audit-fix-all-btn">
+            <Icon name="wand" size={12} />
+            Fix All <span className="wd-audit-fixcount">{fixableCount}</span>
+          </button>
+        ) : null}
       </div>
       {issues.length ? (
         <>
@@ -94,7 +122,7 @@ function AuditPopover({ issues, anchor, onClose, onPick }: { issues: DesignAudit
           </div>
           <ul className="wd-audit-list" role="list" data-testid="audit-list">
             {sorted.map((issue, i) => (
-              <li key={`${issue.code}-${issue.nodeId}-${i}`}>
+              <li key={`${issue.code}-${issue.nodeId}-${i}`} className="wd-audit-row">
                 <button type="button" className={`wd-audit-item ${issue.severity}`} onClick={() => onPick(issue)} title={`Select ${issue.controlName}`} data-testid="audit-item">
                   <i className={`wd-audit-dot ${issue.severity}`} aria-label={issue.severity} />
                   <span className="wd-audit-main">
@@ -105,15 +133,114 @@ function AuditPopover({ issues, anchor, onClose, onPick }: { issues: DesignAudit
                     <span className="wd-audit-msg">{issue.message}</span>
                   </span>
                 </button>
+                {fixable[i] ? (
+                  <button
+                    type="button"
+                    className="wd-audit-fix"
+                    onClick={() => onFix(issue)}
+                    title={`Fix: ${AUDIT_RULE_LABELS[issue.code] ?? issue.code} (${issue.controlName})`}
+                    aria-label={`Fix ${AUDIT_RULE_LABELS[issue.code] ?? issue.code} on ${issue.controlName}`}
+                    data-testid="audit-fix-btn"
+                  >
+                    Fix
+                  </button>
+                ) : null}
               </li>
             ))}
           </ul>
-          <p className="wd-pop-hint">Click an issue to select the control on the form.</p>
+          <p className="wd-pop-hint">Click an issue to select the control on the form{fixableCount ? '; Fix applies a one-click, undoable correction' : ''}.</p>
         </>
       ) : (
         <p className="wd-audit-clean">No layout or accessibility issues found. Controls fit their containers, tab order is unique and dialogs are wired up.</p>
       )}
     </Popover>
+  );
+}
+
+function CultureSwitcher({ state, store }: { state: DesignerState; store: DesignerStore }) {
+  const [adding, setAdding] = useState<Anchor | null>(null);
+  const [value, setValue] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const active = state.activeCulture;
+  const cultures = state.availableCultures.filter((c) => c !== DEFAULT_CULTURE);
+  const submit = () => {
+    const err = store.addCulture(value);
+    setError(err);
+    if (!err) {
+      setAdding(null);
+      setValue('');
+    }
+  };
+  return (
+    <div className={`wd-culture ${active !== DEFAULT_CULTURE ? 'localized' : ''}`} role="group" aria-label="Culture">
+      <Icon name="globe" size={14} />
+      <select
+        ref={selectRef}
+        className="wd-tb-select wd-culture-select"
+        aria-label="Form culture"
+        title="Localized form culture (.resx)"
+        value={active}
+        data-testid="toolbar-culture-select"
+        onChange={(e) => {
+          if (e.target.value === ADD_CULTURE) {
+            const r = (selectRef.current ?? e.currentTarget).getBoundingClientRect();
+            setError(null);
+            setAdding({ x: r.left, y: r.top, width: r.width, height: r.height });
+            return;
+          }
+          store.switchCulture(e.target.value);
+        }}
+      >
+        <option value={DEFAULT_CULTURE}>Default</option>
+        {cultures.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+        <option value={ADD_CULTURE}>+ Add culture…</option>
+      </select>
+      {adding ? (
+        <Popover anchor={adding} onClose={() => setAdding(null)} className="wd-culture-popover">
+          <div className="wd-pop-title">Add culture</div>
+          <form
+            className="wd-culture-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submit();
+            }}
+          >
+            <input
+              autoFocus
+              className={`wd-pg-input mono ${error ? 'invalid' : ''}`}
+              placeholder="de, fr-CA, zh-Hans…"
+              aria-label="Culture tag"
+              value={value}
+              list="wd-culture-suggestions"
+              spellCheck={false}
+              data-testid="toolbar-culture-add-input"
+              onChange={(e) => {
+                setValue(e.target.value);
+                setError(null);
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Escape') setAdding(null);
+              }}
+            />
+            <datalist id="wd-culture-suggestions">
+              {COMMON_CULTURES.filter((c) => !cultures.includes(c)).map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+            <button type="submit" className="wd-btn small" disabled={!value.trim()} data-testid="toolbar-culture-add-btn">
+              Add
+            </button>
+          </form>
+          {error ? <p className="wd-error">{error}</p> : <p className="wd-pop-hint">Creates {state.fileName.replace(/\.Designer\.cs$|\.cs$/i, '') || 'Form'}.&lt;culture&gt;.resx for localized Text.</p>}
+        </Popover>
+      ) : null}
+    </div>
   );
 }
 
@@ -165,6 +292,7 @@ export function Toolbar({
   const frozen = locked || state.readOnly;
   const minFor = (op: AlignOp) => (op.startsWith('space') ? 3 : op.startsWith('center') ? 1 : 2);
   const zoomPct = Math.round(state.zoom * 100);
+  const showCultures = !!doc.localizable || doc.form.properties.Localizable === true || state.availableCultures.length > 1;
 
   return (
     <header className="wd-toolbar" role="toolbar" aria-label="Designer toolbar">
@@ -275,6 +403,13 @@ export function Toolbar({
         ))}
       </div>
 
+      {showCultures ? (
+        <>
+          <Sep />
+          <CultureSwitcher state={state} store={store} />
+        </>
+      ) : null}
+
       <span className="wd-tb-spacer" />
 
       <div className="wd-tb-group wd-zoom" role="group" aria-label="Zoom">
@@ -287,6 +422,7 @@ export function Toolbar({
       </div>
       <Sep />
       <Btn icon="preview" text="Preview" label="Preview form" onClick={() => store.setState({ previewOpen: true })} testId="toolbar-preview-btn" />
+      {state.hasProject ? <Btn icon="play" text="Run" label="Run WinForms Project (dotnet run)" onClick={() => store.runProject()} testId="toolbar-run-btn" /> : null}
       <Btn icon="code" label="View Code" shortcut="F7" onClick={() => store.post({ type: 'viewCode' })} testId="view-code" />
       <Btn icon="splitCode" label="Split: designer code side by side" onClick={() => store.post({ type: 'viewDesignerCode', beside: true })} testId="split-code" />
       <Sep />
@@ -302,6 +438,9 @@ export function Toolbar({
             revealOnCanvas(issue.nodeId);
             setAuditOpen(null);
           }}
+          canFix={(issue) => !state.readOnly && canFixAuditIssue(doc, issue, state.layout)}
+          onFix={(issue) => store.fixAuditIssue(issue)}
+          onFixAll={() => store.fixAllAuditIssues()}
         />
       ) : null}
       {diagOpen ? (

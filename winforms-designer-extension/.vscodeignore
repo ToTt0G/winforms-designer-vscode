@@ -8,6 +8,8 @@ esbuild.mjs
 **/*.map
 **/*.ts
 !dist/**
-images/*.svg
+images/**
+!images/icon.png
+!images/activity-icon.svg
 *.vsix
 node_modules/**

@@ -14,6 +14,7 @@ import {
   isSizeFValue,
   isSizeValue,
   type ColorValue,
+  type DataBindingEntry,
   type DataGridViewColumnNode,
   type DesignDocument,
   type DesignNode,
@@ -50,6 +51,7 @@ import { decodeCSharpString, encodeCSharpString, isCSharpStringLiteral } from '.
 
 export interface ParseDesignerOptions {
   baseType?: 'Form' | 'UserControl';
+  customBaseClass?: string;
   resxXml?: string;
 }
 
@@ -203,6 +205,7 @@ interface ParsedInstance {
   events: Record<string, string>;
   eventSubscriptions: EventSubscription[];
   rawStatements: string[];
+  dataBindings: DataBindingEntry[];
   items?: string[];
   treeNodeRefs: Array<string | TreeNodeItem>;
   stripItemRefs: string[];
@@ -245,6 +248,7 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
   let fileScopedNamespace = false;
   let className = '';
   let detectedBaseTypeFromClass: 'Form' | 'UserControl' | undefined;
+  let detectedCustomBaseClass: string | undefined;
   let classOpenBraceIndex = -1;
   let classCloseBraceIndex = -1;
   let hasUnmatchedClassBrace = false;
@@ -305,15 +309,18 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
             j < tokens.length &&
             tokens[j].text !== '{' &&
             tokens[j].text !== ',' &&
+            tokens[j].text !== 'where' &&
             tokens[j].kind !== 'eof'
           ) {
             baseParts.push(tokens[j].text);
             j++;
           }
           const rawBase = baseParts.join('');
-          const shortBase = extractShortTypeName(rawBase);
+          const baseWithoutGenerics = rawBase.replace(/<[\s\S]*>$/, '');
+          const shortBase = extractShortTypeName(baseWithoutGenerics);
           if (shortBase === 'UserControl') detectedBaseTypeFromClass = 'UserControl';
           else if (shortBase === 'Form') detectedBaseTypeFromClass = 'Form';
+          else if (isCustomBaseClassName(shortBase)) detectedCustomBaseClass = shortBase;
         }
         while (j < tokens.length && tokens[j].text !== '{' && tokens[j].kind !== 'eof') {
           j++;
@@ -678,6 +685,7 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
   const formEvents: Record<string, string> = {};
   const formEventSubscriptions: EventSubscription[] = [];
   const formRawStatements: string[] = [];
+  const formDataBindings: DataBindingEntry[] = [];
   const formChildRefs: ChildRef[] = [];
   const unhandledTopLevelStatements: string[] = [];
   const pendingTrailingStatements: Array<{ text: string; localVarName?: string }> = [];
@@ -857,6 +865,7 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
                 events: {},
                 eventSubscriptions: [],
                 rawStatements: [],
+                dataBindings: [],
                 treeNodeRefs: [],
                 stripItemRefs: [],
                 columnRefs: [],
@@ -975,6 +984,7 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
           source,
           instances,
           formChildRefs,
+          formDataBindings,
           parsedTreeNodes
         );
         if (handled) {
@@ -1007,12 +1017,21 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
   // hoist it to unhandledTopLevelStatements so it stays in scope before control blocks!
   const unhandledTrailingStatements: string[] = [];
   if (pendingTrailingStatements.length > 0) {
+    const collectBindingExprs = (bindings: DataBindingEntry[]): string[] =>
+      bindings.flatMap((b) =>
+        [b.rawExpression, b.dataSource, b.extraArgs].filter((s): s is string => Boolean(s))
+      );
     const allControlRawExprs: string[] = [
       ...Object.values(formRawPropertyExpressions),
       ...formRawStatements,
+      ...collectBindingExprs(formDataBindings),
     ];
     for (const inst of instances.values()) {
-      allControlRawExprs.push(...Object.values(inst.rawPropertyExpressions), ...inst.rawStatements);
+      allControlRawExprs.push(
+        ...Object.values(inst.rawPropertyExpressions),
+        ...inst.rawStatements,
+        ...collectBindingExprs(inst.dataBindings)
+      );
     }
     const referencedLocalVars = new Set<string>();
     for (const item of pendingTrailingStatements) {
@@ -1323,6 +1342,7 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
       ...(listViewColumns && listViewColumns.length > 0 ? { listViewColumns } : {}),
       ...(inst.items && inst.items.length > 0 ? { items: [...inst.items] } : {}),
       ...(treeNodes && treeNodes.length > 0 ? { treeNodes } : {}),
+      ...(inst.dataBindings.length > 0 ? { dataBindings: [...inst.dataBindings] } : {}),
       ...(inst.rawStatements.length > 0 ? { rawStatements: [...inst.rawStatements] } : {}),
       ...(fieldDecl?.modifier && fieldDecl.modifier !== 'private'
         ? { fieldModifier: fieldDecl.modifier }
@@ -1394,8 +1414,11 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
       ? { eventSubscriptions: formEventSubscriptions }
       : {}),
     children: formChildren,
+    ...(formDataBindings.length > 0 ? { dataBindings: formDataBindings } : {}),
     ...(formRawStatements.length > 0 ? { rawStatements: formRawStatements } : {}),
   };
+
+  const customBaseClass = options?.customBaseClass ?? detectedCustomBaseClass;
 
   const useThisQualifier = thisCount === 0 && noThisCount === 0 ? true : thisCount >= noThisCount;
   const useShorthandEvents =
@@ -1430,6 +1453,7 @@ export function parseDesignerCs(source: string, options?: ParseDesignerOptions):
     fileScopedNamespace,
     className: className || formName,
     baseType,
+    ...(customBaseClass ? { customBaseClass } : {}),
     form,
     components,
     resources,
@@ -1465,6 +1489,7 @@ function getOrCreateInstance(
       events: {},
       eventSubscriptions: [],
       rawStatements: [],
+      dataBindings: [],
       treeNodeRefs: [],
       stripItemRefs: [],
       columnRefs: [],
@@ -1485,6 +1510,21 @@ function extractShortTypeName(typeName: string): string {
   const cleaned = typeName.replace(/^global::/, '').replace(/\?$/, '');
   const dotIdx = cleaned.lastIndexOf('.');
   return dotIdx >= 0 ? cleaned.slice(dotIdx + 1) : cleaned;
+}
+
+const NON_CUSTOM_BASE_TYPES = new Set<string>([
+  'Form',
+  'UserControl',
+  'object',
+  'Object',
+  'IDisposable',
+  'IComponent',
+  'ISupportInitialize',
+]);
+
+function isCustomBaseClassName(shortBase: string): boolean {
+  if (!shortBase || NON_CUSTOM_BASE_TYPES.has(shortBase)) return false;
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(shortBase);
 }
 
 function isLikelyWinFormsFieldType(typeName: string): boolean {
@@ -1823,8 +1863,23 @@ function handleCollectionOrHierarchyCall(
   source: string,
   instances: Map<string, ParsedInstance>,
   formChildRefs: ChildRef[],
+  formDataBindings: DataBindingEntry[],
   parsedTreeNodes: Map<string, ParsedTreeNode>
 ): boolean {
+  // 0. DataBindings.Add(...) on either the Form or a control
+  if (prefixChain === 'DataBindings' && methodName === 'Add') {
+    const entry = parseDataBindingAddArgs(args, source);
+    if (!entry) return false;
+    if (owner === '__form__') {
+      formDataBindings.push(entry);
+      return true;
+    }
+    const targetInst = instances.get(owner);
+    if (!targetInst) return false;
+    targetInst.dataBindings.push(entry);
+    return true;
+  }
+
   // 1. Controls.Add / Controls.AddRange / Controls.SetChildIndex / Panel1.Controls.* / Panel2.Controls.* / TabPages.*
   if (
     (prefixChain === 'Controls' ||
@@ -2069,6 +2124,142 @@ function handleCollectionOrHierarchyCall(
 
   void source;
   return false;
+}
+
+function normalizeBindingDataSource(rawExpr: string): string {
+  const trimmed = rawExpr.trim();
+  const simpleThisMatch = /^this\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);
+  if (simpleThisMatch) {
+    return simpleThisMatch[1];
+  }
+  return trimmed;
+}
+
+function tryParseBooleanLiteral(tokens: Token[]): boolean | undefined {
+  const u = unwrapOuterParens(tokens);
+  if (u.length === 1 && u[0].kind === 'keyword') {
+    if (u[0].text === 'true') return true;
+    if (u[0].text === 'false') return false;
+  }
+  return undefined;
+}
+
+function parseDataBindingAddArgs(args: Token[][], source: string): DataBindingEntry | null {
+  if (args.length === 0) return null;
+
+  const firstTok = args[0][0];
+  const lastSlice = args[args.length - 1];
+  const lastTok = lastSlice[lastSlice.length - 1];
+  if (!firstTok || !lastTok) return null;
+  const rawExpression = source.slice(firstTok.start, lastTok.end).trim();
+
+  // Case 1: DataBindings.Add(new [System.Windows.Forms.]Binding(prop, dataSource, dataMember[, formattingEnabled[, updateMode...]]))
+  if (args.length === 1) {
+    const inner = unwrapOuterParens(args[0]);
+    if (inner.length < 4 || inner[0].text !== 'new') return null;
+    const openParen = inner.findIndex((t) => t.text === '(');
+    if (openParen < 2) return null;
+    const closeParen = findMatchingDelimiter(inner, openParen, '(', ')');
+    if (closeParen !== inner.length - 1) return null;
+
+    const rawType = inner
+      .slice(1, openParen)
+      .map((t) => t.text)
+      .join('');
+    if (extractShortTypeName(rawType) !== 'Binding') return null;
+
+    const bArgs = splitTokenArguments(inner.slice(openParen + 1, closeParen));
+    return parseBindingArgTuple(bArgs, source, rawExpression);
+  }
+
+  // Case 2: Shorthand DataBindings.Add("Text", this.bindingSource1, "Name"[, true[, updateMode...]])
+  if (args.length >= 3) {
+    return parseBindingArgTuple(args, source, rawExpression);
+  }
+
+  return null;
+}
+
+function parseBindingArgTuple(
+  bArgs: Token[][],
+  source: string,
+  rawExpression: string
+): DataBindingEntry | null {
+  if (bArgs.length < 3) return null;
+  const propertyName = tryParseStringExpression(bArgs[0]);
+  if (propertyName === null) return null;
+
+  const dsTokens = bArgs[1];
+  if (dsTokens.length === 0) return null;
+  const rawDataSource = source.slice(dsTokens[0].start, dsTokens[dsTokens.length - 1].end).trim();
+  if (!rawDataSource) return null;
+  const hadThisPrefix = /^this\.[A-Za-z_][A-Za-z0-9_]*$/.test(rawDataSource);
+  const isBareIdent = /^[A-Za-z_][A-Za-z0-9_]*$/.test(rawDataSource) && rawDataSource !== 'this' && rawDataSource !== 'null';
+  const sourceQualifier: 'this' | 'none' | undefined = hadThisPrefix
+    ? 'this'
+    : isBareIdent
+      ? 'none'
+      : undefined;
+  const dataSource = normalizeBindingDataSource(rawDataSource);
+
+  const dataMember = tryParseStringExpression(bArgs[2]);
+  if (dataMember === null) return null;
+
+  let formattingEnabled: boolean | undefined;
+  if (bArgs.length >= 4) {
+    const parsedBool = tryParseBooleanLiteral(bArgs[3]);
+    if (parsedBool === undefined) {
+      return null;
+    }
+    formattingEnabled = parsedBool;
+  }
+
+  let extraArgs: string | undefined;
+  if (bArgs.length >= 5) {
+    const firstExtra = bArgs[4][0];
+    const lastExtraSlice = bArgs[bArgs.length - 1];
+    const lastExtra = lastExtraSlice[lastExtraSlice.length - 1];
+    if (firstExtra && lastExtra) {
+      const sliced = source.slice(firstExtra.start, lastExtra.end).trim();
+      if (sliced) {
+        extraArgs = sliced;
+      }
+    }
+  }
+
+  return {
+    propertyName,
+    dataSource,
+    dataMember,
+    ...(formattingEnabled !== undefined ? { formattingEnabled } : {}),
+    ...(extraArgs !== undefined ? { extraArgs } : {}),
+    ...(sourceQualifier !== undefined ? { sourceQualifier } : {}),
+    ...(rawExpression ? { rawExpression } : {}),
+  };
+}
+
+/**
+ * Checks whether a preserved raw C# DataBindings.Add(...) argument list still
+ * parses to the same structured `DataBindingEntry`.
+ */
+export function doesRawDataBindingMatchEntry(
+  rawExpr: string,
+  entry: DataBindingEntry
+): boolean {
+  const trimmed = rawExpr.trim();
+  if (!trimmed) return false;
+  const tokens = tokenizeCSharp(trimmed).filter((t) => t.kind !== 'eof');
+  if (tokens.length === 0) return false;
+  const args = splitTokenArguments(tokens);
+  const parsed = parseDataBindingAddArgs(args, trimmed);
+  if (!parsed) return false;
+  return (
+    parsed.propertyName === entry.propertyName &&
+    parsed.dataSource === normalizeBindingDataSource(entry.dataSource) &&
+    parsed.dataMember === entry.dataMember &&
+    Boolean(parsed.formattingEnabled) === Boolean(entry.formattingEnabled) &&
+    (parsed.extraArgs ?? '') === (entry.extraArgs ?? '')
+  );
 }
 
 function extractArrayElements(tokens: Token[]): Token[][] | null {

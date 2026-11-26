@@ -183,7 +183,7 @@ export function App({ store }: { store: DesignerStore }) {
           handled();
           const id = st.selection[0];
           const n = id ? getNode(st.doc, id) : undefined;
-          if (n && !n.isComponent && hasTextProperty(n.type) && !st.locked && !st.readOnly) store.setState({ inlineEditId: n.id });
+          if (n && !n.isComponent && !n.inherited && hasTextProperty(n.type) && !st.locked && !st.readOnly) store.setState({ inlineEditId: n.id });
           return;
         }
         case 'F7':

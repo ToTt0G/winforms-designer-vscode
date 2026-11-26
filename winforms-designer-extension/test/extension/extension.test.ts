@@ -74,6 +74,34 @@ class MockWorkspaceEdit {
   }
 }
 
+class MockTreeItem {
+  public description?: string;
+  public contextValue?: string;
+  public resourceUri?: MockUri;
+  public tooltip?: string;
+  public iconPath?: unknown;
+  public command?: unknown;
+  constructor(
+    public readonly label: string,
+    public readonly collapsibleState?: number
+  ) {}
+}
+
+class MockThemeIcon {
+  constructor(public readonly id: string) {}
+}
+
+interface MockTerminal {
+  name: string;
+  cwd?: string;
+  exitStatus?: { code?: number };
+  shownCount: number;
+  sentTexts: string[];
+  show(preserveFocus?: boolean): void;
+  sendText(text: string): void;
+  dispose(): void;
+}
+
 type Listener<T> = (e: T) => void;
 
 class MockEventEmitter<T> {
@@ -96,6 +124,9 @@ class MockEventEmitter<T> {
   }
   public listenerCount(): number {
     return this.listeners.size;
+  }
+  public dispose(): void {
+    this.listeners.clear();
   }
 }
 
@@ -158,15 +189,21 @@ interface MockState {
   configUpdates: Array<{ key: string; value: unknown; target: number }>;
   registeredCommands: Map<string, (...args: unknown[]) => unknown>;
   registeredEditors: Map<string, { provider: unknown; options: unknown }>;
+  registeredTreeProviders: Map<string, unknown>;
+  terminals: MockTerminal[];
   executedCommands: Array<{ command: string; args: unknown[] }>;
   infoMessages: string[];
   warningMessages: string[];
   errorMessages: string[];
   nextInfoChoice?: string;
+  nextWarningChoice?: string;
   nextInputBoxValue?: string;
   lastInputBoxOptions?: vscodeTypes.InputBoxOptions;
   nextQuickPickIndex?: number;
-  lastQuickPickItems?: Array<{ label: string; description?: string; template?: string }>;
+  nextQuickPickQueue: number[];
+  lastQuickPickItems?: Array<{ label: string; description?: string; template?: string; tfm?: string }>;
+  watcherCreateEmitter: MockEventEmitter<MockUri>;
+  watcherDeleteEmitter: MockEventEmitter<MockUri>;
   applyEditDelayMs?: number;
   applyEditShouldFail?: boolean;
   lastConfigResource?: MockUri;
@@ -192,10 +229,15 @@ const mockState: MockState = {
   configUpdates: [],
   registeredCommands: new Map(),
   registeredEditors: new Map(),
+  registeredTreeProviders: new Map(),
+  terminals: [],
   executedCommands: [],
   infoMessages: [],
   warningMessages: [],
   errorMessages: [],
+  nextQuickPickQueue: [],
+  watcherCreateEmitter: new MockEventEmitter(),
+  watcherDeleteEmitter: new MockEventEmitter(),
   openedEditors: [],
   textDocuments: [],
   workspaceFolders: [],
@@ -212,15 +254,21 @@ function resetMockState(): void {
   mockState.configUpdates = [];
   mockState.registeredCommands.clear();
   mockState.registeredEditors.clear();
+  mockState.registeredTreeProviders.clear();
+  mockState.terminals = [];
   mockState.executedCommands = [];
   mockState.infoMessages = [];
   mockState.warningMessages = [];
   mockState.errorMessages = [];
   mockState.nextInfoChoice = undefined;
+  mockState.nextWarningChoice = undefined;
   mockState.nextInputBoxValue = undefined;
   mockState.lastInputBoxOptions = undefined;
   mockState.nextQuickPickIndex = undefined;
+  mockState.nextQuickPickQueue = [];
   mockState.lastQuickPickItems = undefined;
+  mockState.watcherCreateEmitter.clear();
+  mockState.watcherDeleteEmitter.clear();
   mockState.applyEditDelayMs = undefined;
   mockState.applyEditShouldFail = undefined;
   mockState.lastConfigResource = undefined;
@@ -242,6 +290,14 @@ const mockVscode = {
   Range: MockRange,
   Selection: MockSelection,
   WorkspaceEdit: MockWorkspaceEdit,
+  EventEmitter: MockEventEmitter,
+  TreeItem: MockTreeItem,
+  ThemeIcon: MockThemeIcon,
+  TreeItemCollapsibleState: {
+    None: 0,
+    Collapsed: 1,
+    Expanded: 2,
+  },
   ViewColumn: {
     Active: -1,
     Beside: -2,
@@ -349,6 +405,14 @@ const mockVscode = {
     },
     onDidChangeTextDocument: mockState.textChangeEmitter.event,
     onDidChangeConfiguration: mockState.configChangeEmitter.event,
+    createFileSystemWatcher(_glob: string) {
+      return {
+        onDidCreate: mockState.watcherCreateEmitter.event,
+        onDidDelete: mockState.watcherDeleteEmitter.event,
+        onDidChange: () => ({ dispose: () => {} }),
+        dispose: () => {},
+      };
+    },
   },
   window: {
     get activeTextEditor() {
@@ -357,17 +421,45 @@ const mockVscode = {
     get activeColorTheme() {
       return mockState.activeColorTheme;
     },
+    get terminals() {
+      return mockState.terminals;
+    },
     registerCustomEditorProvider(viewType: string, provider: unknown, options: unknown) {
       mockState.registeredEditors.set(viewType, { provider, options });
       return { dispose: () => mockState.registeredEditors.delete(viewType) };
+    },
+    registerTreeDataProvider(viewId: string, provider: unknown) {
+      mockState.registeredTreeProviders.set(viewId, provider);
+      return { dispose: () => mockState.registeredTreeProviders.delete(viewId) };
+    },
+    createTerminal(options?: { name?: string; cwd?: string } | string) {
+      const name = typeof options === 'string' ? options : (options?.name ?? 'Terminal');
+      const cwd = typeof options === 'object' ? options?.cwd : undefined;
+      const term: MockTerminal = {
+        name,
+        cwd,
+        shownCount: 0,
+        sentTexts: [],
+        show() {
+          term.shownCount += 1;
+        },
+        sendText(text: string) {
+          term.sentTexts.push(text);
+        },
+        dispose() {
+          term.exitStatus = { code: 0 };
+        },
+      };
+      mockState.terminals.push(term);
+      return term;
     },
     async showInformationMessage(message: string, ..._items: string[]) {
       mockState.infoMessages.push(message);
       return mockState.nextInfoChoice;
     },
-    async showWarningMessage(message: string) {
+    async showWarningMessage(message: string, ..._items: unknown[]) {
       mockState.warningMessages.push(message);
-      return undefined;
+      return mockState.nextWarningChoice;
     },
     async showErrorMessage(message: string) {
       mockState.errorMessages.push(message);
@@ -377,8 +469,14 @@ const mockVscode = {
       mockState.lastInputBoxOptions = options;
       return mockState.nextInputBoxValue;
     },
-    async showQuickPick(items: Array<{ label: string; description?: string; template?: string }>) {
+    async showQuickPick(
+      items: Array<{ label: string; description?: string; template?: string; tfm?: string }>
+    ) {
       mockState.lastQuickPickItems = items;
+      if (mockState.nextQuickPickQueue.length > 0) {
+        const idx = mockState.nextQuickPickQueue.shift()!;
+        return items[idx];
+      }
       if (mockState.nextQuickPickIndex !== undefined) {
         return items[mockState.nextQuickPickIndex];
       }
@@ -437,6 +535,8 @@ const configMod = require('../../src/extension/config') as typeof import('../../
 const customEditorMod = require('../../src/extension/customEditor') as typeof import('../../src/extension/customEditor');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const extensionMod = require('../../src/extension/extension') as typeof import('../../src/extension/extension');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const formsTreeViewMod = require('../../src/extension/formsTreeView') as typeof import('../../src/extension/formsTreeView');
 
 after(() => {
   moduleInternal._load = originalModuleLoad;
@@ -1738,6 +1838,476 @@ partial class SyncForm
       ]);
 
       panel._dispose();
+    });
+
+    it('resolves static inherited base Form/UserControl chains, protects against cycles, and never emits inherited controls on save', async () => {
+      const baseDir = path.join(tempDir, 'Base');
+      const derivedDir = path.join(tempDir, 'Dialogs');
+      fs.mkdirSync(baseDir, { recursive: true });
+      fs.mkdirSync(derivedDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(baseDir, 'BaseDialogForm.cs'),
+        `namespace DemoApp.Base;
+public partial class BaseDialogForm : System.Windows.Forms.Form
+{
+    public BaseDialogForm() { InitializeComponent(); }
+}
+`,
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(baseDir, 'BaseDialogForm.Designer.cs'),
+        `namespace DemoApp.Base;
+
+partial class BaseDialogForm
+{
+    #region Windows Form Designer generated code
+    private void InitializeComponent()
+    {
+        this.panelHeader = new System.Windows.Forms.Panel();
+        this.labelHeader = new System.Windows.Forms.Label();
+        this.baseToolTip = new System.Windows.Forms.ToolTip();
+        this.panelHeader.SuspendLayout();
+        this.SuspendLayout();
+        this.panelHeader.Controls.Add(this.labelHeader);
+        this.panelHeader.Location = new System.Drawing.Point(0, 0);
+        this.panelHeader.Name = "panelHeader";
+        this.panelHeader.Size = new System.Drawing.Size(520, 48);
+        this.labelHeader.Location = new System.Drawing.Point(12, 12);
+        this.labelHeader.Name = "labelHeader";
+        this.labelHeader.Size = new System.Drawing.Size(120, 20);
+        this.labelHeader.Text = "Header";
+        this.BackColor = System.Drawing.Color.WhiteSmoke;
+        this.ClientSize = new System.Drawing.Size(520, 340);
+        this.Controls.Add(this.panelHeader);
+        this.Name = "BaseDialogForm";
+        this.panelHeader.ResumeLayout(false);
+        this.ResumeLayout(false);
+    }
+    #endregion
+
+    protected System.Windows.Forms.Panel panelHeader;
+    protected System.Windows.Forms.Label labelHeader;
+    private System.Windows.Forms.ToolTip baseToolTip;
+}
+`,
+        'utf8'
+      );
+
+      const derivedCs = path.join(derivedDir, 'OrderDialog.cs');
+      const derivedDesigner = path.join(derivedDir, 'OrderDialog.Designer.cs');
+      fs.writeFileSync(
+        derivedCs,
+        `namespace DemoApp.Dialogs;
+public partial class OrderDialog : BaseDialogForm
+{
+    public OrderDialog() { InitializeComponent(); }
+}
+`,
+        'utf8'
+      );
+      const derivedInitial = `namespace DemoApp.Dialogs;
+
+partial class OrderDialog
+{
+    #region Windows Form Designer generated code
+    private void InitializeComponent()
+    {
+        this.buttonSave = new System.Windows.Forms.Button();
+        this.SuspendLayout();
+        this.buttonSave.Location = new System.Drawing.Point(20, 80);
+        this.buttonSave.Name = "buttonSave";
+        this.buttonSave.Size = new System.Drawing.Size(96, 28);
+        this.buttonSave.Text = "Save";
+        this.Controls.Add(this.buttonSave);
+        this.Name = "OrderDialog";
+        this.Text = "Order";
+        this.ResumeLayout(false);
+    }
+    #endregion
+
+    private System.Windows.Forms.Button buttonSave;
+}
+`;
+      fs.writeFileSync(derivedDesigner, derivedInitial, 'utf8');
+
+      const doc = createMockTextDocument(MockUri.file(derivedDesigner), derivedInitial);
+      mockState.textDocuments.push(doc);
+      const panel = createMockWebviewPanel();
+      const ctx = createMockContext(tempDir);
+      const provider = new customEditorMod.WinFormsCustomEditorProvider(ctx);
+      await provider.resolveCustomTextEditor(
+        doc as unknown as vscodeTypes.TextDocument,
+        panel as unknown as vscodeTypes.WebviewPanel,
+        {} as vscodeTypes.CancellationToken
+      );
+
+      panel._sendFromWebview({ type: 'ready' });
+      await new Promise((r) => setTimeout(r, 15));
+      const initMsg = panel._postedMessages.find((m) => m.type === 'init');
+      assert.ok(initMsg && initMsg.type === 'init');
+      assert.equal(initMsg.document.baseType, 'Form');
+      assert.equal(initMsg.document.customBaseClass, 'BaseDialogForm');
+      // Inherited panel prepended before derived buttonSave
+      assert.equal(initMsg.document.form.children.length, 2);
+      assert.equal(initMsg.document.form.children[0].name, 'panelHeader');
+      assert.equal(initMsg.document.form.children[0].inherited, true);
+      assert.equal(initMsg.document.form.children[0].inheritedFrom, 'BaseDialogForm');
+      assert.equal(initMsg.document.form.children[0].children[0].name, 'labelHeader');
+      assert.equal(initMsg.document.form.children[0].children[0].inherited, true);
+      assert.equal(initMsg.document.form.children[1].name, 'buttonSave');
+      assert.equal(initMsg.document.form.children[1].inherited, undefined);
+      // Inherited component merged
+      assert.equal(initMsg.document.components.length, 1);
+      assert.equal(initMsg.document.components[0].name, 'baseToolTip');
+      assert.equal(initMsg.document.components[0].inherited, true);
+      // Inherited visual defaults (ClientSize & BackColor unset on derived)
+      assert.deepEqual(initMsg.document.form.properties.ClientSize, {
+        kind: 'size',
+        width: 520,
+        height: 340,
+      });
+
+      // Visual edit on derived form must NEVER emit inherited controls into derived .Designer.cs
+      const editedDoc = structuredClone(initMsg.document);
+      editedDoc.form.properties.Text = 'Updated Order';
+      delete editedDoc.form.rawPropertyExpressions?.Text;
+      panel._sendFromWebview({
+        type: 'applyDocument',
+        document: editedDoc,
+        baseDocumentVersion: initMsg.documentVersion,
+        revision: 1,
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      const updatedText = doc.getText();
+      assert.ok(updatedText.includes('this.Text = "Updated Order";'));
+      assert.ok(!updatedText.includes('ClientSize'), 'Unedited inherited ClientSize must NOT be emitted as a derived override');
+      assert.ok(!updatedText.includes('panelHeader'));
+      assert.ok(!updatedText.includes('labelHeader'));
+      assert.ok(!updatedText.includes('baseToolTip'));
+      panel._dispose();
+
+      // Cycle-protected inheritance check (CycleA -> CycleB -> CycleA) must terminate cleanly
+      fs.writeFileSync(path.join(tempDir, 'CycleA.cs'), 'public partial class CycleA : CycleB {}', 'utf8');
+      fs.writeFileSync(path.join(tempDir, 'CycleA.Designer.cs'), 'partial class CycleA { private void InitializeComponent() {} }', 'utf8');
+      fs.writeFileSync(path.join(tempDir, 'CycleB.cs'), 'public partial class CycleB : CycleA {}', 'utf8');
+      fs.writeFileSync(path.join(tempDir, 'CycleB.Designer.cs'), 'partial class CycleB { private void InitializeComponent() {} }', 'utf8');
+      const cycleDoc = createMockTextDocument(
+        MockUri.file(path.join(tempDir, 'CycleA.Designer.cs')),
+        'partial class CycleA { private void InitializeComponent() {} }'
+      );
+      const cyclePayload = provider.buildPayloadForDocument(
+        cycleDoc as unknown as vscodeTypes.TextDocument
+      );
+      assert.equal(cyclePayload.doc.customBaseClass, 'CycleB');
+    });
+
+    it('supports multi-culture .resx localization (init, switchCulture, addCulture, setCultureValue) and rejects path traversal', async () => {
+      fs.writeFileSync(
+        path.join(tempDir, 'LocApp.csproj'),
+        `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0-windows</TargetFramework><UseWindowsForms>true</UseWindowsForms></PropertyGroup></Project>`,
+        'utf8'
+      );
+      const designerPath = path.join(tempDir, 'LocForm.Designer.cs');
+      const designerSrc = `namespace LocApp;
+partial class LocForm
+{
+    #region Windows Form Designer generated code
+    private void InitializeComponent()
+    {
+        this.buttonSave = new System.Windows.Forms.Button();
+        this.SuspendLayout();
+        this.buttonSave.Name = "buttonSave";
+        this.buttonSave.Text = "Save";
+        this.ClientSize = new System.Drawing.Size(400, 300);
+        this.Controls.Add(this.buttonSave);
+        this.Name = "LocForm";
+        this.Text = "Settings";
+        this.ResumeLayout(false);
+    }
+    #endregion
+    private System.Windows.Forms.Button buttonSave;
+}
+`;
+      fs.writeFileSync(designerPath, designerSrc, 'utf8');
+      fs.writeFileSync(
+        path.join(tempDir, 'LocForm.de.resx'),
+        `<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <data name="buttonSave.Text" xml:space="preserve">
+    <value>Speichern</value>
+  </data>
+</root>
+`,
+        'utf8'
+      );
+
+      const doc = createMockTextDocument(MockUri.file(designerPath), designerSrc);
+      mockState.textDocuments.push(doc);
+      const panel = createMockWebviewPanel();
+      const ctx = createMockContext(tempDir);
+      const provider = new customEditorMod.WinFormsCustomEditorProvider(ctx);
+      await provider.resolveCustomTextEditor(
+        doc as unknown as vscodeTypes.TextDocument,
+        panel as unknown as vscodeTypes.WebviewPanel,
+        {} as vscodeTypes.CancellationToken
+      );
+
+      panel._sendFromWebview({ type: 'ready' });
+      await new Promise((r) => setTimeout(r, 15));
+      const initMsg = panel._postedMessages.find((m) => m.type === 'init');
+      assert.ok(initMsg && initMsg.type === 'init');
+      assert.equal(initMsg.hasProject, true);
+      assert.equal(initMsg.document.localizable, true);
+      assert.deepEqual(initMsg.availableCultures, ['default', 'de']);
+      assert.equal(initMsg.activeCulture, 'default');
+
+      // Switch to 'de'
+      panel._postedMessages.length = 0;
+      panel._sendFromWebview({ type: 'switchCulture', culture: 'de' });
+      await new Promise((r) => setTimeout(r, 15));
+      const sw = panel._postedMessages.find((m) => m.type === 'cultureChanged');
+      assert.ok(sw && sw.type === 'cultureChanged');
+      assert.equal(sw.activeCulture, 'de');
+      assert.equal(sw.cultureStrings['buttonSave.Text'], 'Speichern');
+
+      // Add a new culture 'fr-FR'
+      panel._postedMessages.length = 0;
+      panel._sendFromWebview({ type: 'addCulture', culture: 'fr-FR' });
+      await new Promise((r) => setTimeout(r, 15));
+      const frPath = path.join(tempDir, 'LocForm.fr-FR.resx');
+      assert.equal(fs.existsSync(frPath), true);
+      const added = panel._postedMessages.find((m) => m.type === 'cultureChanged');
+      assert.ok(added && added.type === 'cultureChanged');
+      assert.equal(added.activeCulture, 'fr-FR');
+      assert.deepEqual(added.availableCultures, ['default', 'de', 'fr-FR']);
+
+      // Set localized value on disk for 'fr-FR'
+      panel._postedMessages.length = 0;
+      panel._sendFromWebview({
+        type: 'setCultureValue',
+        culture: 'fr-FR',
+        key: 'buttonSave.Text',
+        value: 'Enregistrer',
+      });
+      await new Promise((r) => setTimeout(r, 15));
+      const updated = panel._postedMessages.find((m) => m.type === 'cultureChanged');
+      assert.ok(updated && updated.type === 'cultureChanged');
+      assert.equal(updated.cultureStrings['buttonSave.Text'], 'Enregistrer');
+      assert.ok(fs.readFileSync(frPath, 'utf8').includes('Enregistrer'));
+      // Runtime wiring: neutral .resx seeded & Designer.cs switched to resources.GetString(...)
+      assert.ok(fs.readFileSync(path.join(tempDir, 'LocForm.resx'), 'utf8').includes('Save'));
+      assert.ok(doc.getText().includes('resources.GetString("buttonSave.Text")'));
+
+      // Set localized value on an OPEN VS Code .resx document via WorkspaceEdit
+      const openDeDoc = createMockTextDocument(
+        MockUri.file(path.join(tempDir, 'LocForm.de.resx')),
+        fs.readFileSync(path.join(tempDir, 'LocForm.de.resx'), 'utf8')
+      );
+      mockState.textDocuments.push(openDeDoc);
+      panel._postedMessages.length = 0;
+      panel._sendFromWebview({
+        type: 'setCultureValue',
+        culture: 'de',
+        key: '$this.Text',
+        value: 'Einstellungen',
+      });
+      await new Promise((r) => setTimeout(r, 15));
+      assert.ok(openDeDoc.getText().includes('Einstellungen'));
+
+      // Reject path traversal & 'default' writes strictly
+      panel._postedMessages.length = 0;
+      mockState.warningMessages.length = 0;
+      panel._sendFromWebview({ type: 'addCulture', culture: '../../evil' });
+      panel._sendFromWebview({
+        type: 'setCultureValue',
+        culture: 'default',
+        key: 'buttonSave.Text',
+        value: 'Nope',
+      });
+      panel._sendFromWebview({
+        type: 'setCultureValue',
+        culture: '../escape',
+        key: 'buttonSave.Text',
+        value: 'Nope',
+      });
+      await new Promise((r) => setTimeout(r, 15));
+      assert.equal(panel._postedMessages.length, 0);
+      assert.equal(mockState.warningMessages.length, 3);
+
+      // runProjectAction triggers winforms.buildApp / winforms.runApp commands
+      mockState.executedCommands.length = 0;
+      panel._sendFromWebview({ type: 'runProjectAction', action: 'build' });
+      panel._sendFromWebview({ type: 'runProjectAction', action: 'run' });
+      await new Promise((r) => setTimeout(r, 15));
+      assert.deepEqual(
+        mockState.executedCommands.map((c) => c.command),
+        ['winforms.buildApp', 'winforms.runApp']
+      );
+
+      panel._dispose();
+    });
+
+    it('scans workspace forms in WinFormsExplorerProvider and executes newProject, buildApp, runApp, stopApp, deleteForm, and refreshFormsView', async () => {
+      const ctx = createMockContext(tempDir);
+      const spawnedCommands: Array<{ command: string; args: readonly string[] }> = [];
+      let killedCount = 0;
+
+      const provider = extensionMod.activateWithDeps(ctx, undefined, {
+        restartDelayMs: 0,
+        detectEnvironment: () => ({
+          platform: 'win32',
+          isWsl: false,
+          dotnetPath: 'dotnet',
+        }),
+        spawnProcess: (command, args) => {
+          spawnedCommands.push({ command, args });
+          const handlers = new Map<string, Array<(...a: unknown[]) => void>>();
+          const proc = {
+            pid: 4242 + spawnedCommands.length,
+            stdout: null,
+            stderr: null,
+            on(event: 'close' | 'error', listener: (...a: unknown[]) => void) {
+              const list = handlers.get(event) ?? [];
+              list.push(listener);
+              handlers.set(event, list);
+              if (event === 'close' && args[0] === 'build') {
+                setImmediate(() => listener(0, null));
+              }
+              return proc;
+            },
+            kill() {
+              killedCount += 1;
+              for (const fn of handlers.get('close') ?? []) {
+                fn(null, 'SIGTERM');
+              }
+              return true;
+            },
+          };
+          return proc;
+        },
+        killProcessTree: (proc) => {
+          proc.kill('SIGTERM');
+        },
+      });
+
+      // Verify tree provider and all 11 commands are registered
+      assert.ok(mockState.registeredTreeProviders.has('winformsDesigner.formsView'));
+      for (const cmd of [
+        'winforms.openDesigner',
+        'winforms.viewCode',
+        'winforms.viewDesignerCode',
+        'winforms.newForm',
+        'winforms.newUserControl',
+        'winforms.newProject',
+        'winforms.buildApp',
+        'winforms.runApp',
+        'winforms.stopApp',
+        'winforms.deleteForm',
+        'winforms.refreshFormsView',
+      ]) {
+        assert.ok(mockState.registeredCommands.has(cmd), `Expected ${cmd} to be registered`);
+      }
+
+      // 1. winforms.newProject creates folder + 4 files and opens MainForm.Designer.cs
+      mockState.nextInputBoxValue = 'DemoWinApp';
+      mockState.nextQuickPickQueue = [0, 1]; // net10.0-windows, dialog
+      await mockState.registeredCommands.get('winforms.newProject')!(MockUri.file(tempDir));
+
+      const projDir = path.join(tempDir, 'DemoWinApp');
+      const csprojPath = path.join(projDir, 'DemoWinApp.csproj');
+      const mainDesignerPath = path.join(projDir, 'MainForm.Designer.cs');
+      assert.equal(fs.existsSync(csprojPath), true);
+      assert.equal(fs.existsSync(path.join(projDir, 'Program.cs')), true);
+      assert.equal(fs.existsSync(path.join(projDir, 'MainForm.cs')), true);
+      assert.equal(fs.existsSync(mainDesignerPath), true);
+      assert.equal(mockState.executedCommands[0]?.command, 'vscode.openWith');
+      assert.equal((mockState.executedCommands[0]?.args[0] as MockUri).fsPath, mainDesignerPath);
+
+      // 2. WinFormsExplorerProvider discovers MainForm & UserControl, skipping bin/obj
+      const binDir = path.join(projDir, 'bin', 'Debug');
+      const controlsDir = path.join(projDir, 'Controls');
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.mkdirSync(controlsDir, { recursive: true });
+      fs.writeFileSync(path.join(binDir, 'Ignored.Designer.cs'), 'partial class Ignored {}', 'utf8');
+      fs.writeFileSync(
+        path.join(controlsDir, 'AddressBox.cs'),
+        'public partial class AddressBox : UserControl {}',
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(controlsDir, 'AddressBox.Designer.cs'),
+        'partial class AddressBox { private void InitializeComponent() {} }',
+        'utf8'
+      );
+
+      const treeProvider = mockState.registeredTreeProviders.get(
+        'winformsDesigner.formsView'
+      ) as InstanceType<typeof formsTreeViewMod.WinFormsExplorerProvider>;
+      const items = treeProvider.getChildren();
+      assert.equal(items.length, 2);
+      const mainItem = items.find((i) => i.baseName === 'MainForm')!;
+      const ucItem = items.find((i) => i.baseName === 'AddressBox')!;
+      assert.equal(mainItem.contextValue, 'winformsForm');
+      assert.equal(mainItem.description, 'DemoWinApp (Form)');
+      assert.equal((mainItem.command as { command: string }).command, 'winforms.openDesigner');
+      assert.equal(ucItem.description, 'DemoWinApp/Controls (UserControl)');
+
+      // Refresh event fires via refreshFormsView
+      let refreshCount = 0;
+      treeProvider.onDidChangeTreeData?.(() => {
+        refreshCount += 1;
+      });
+      await mockState.registeredCommands.get('winforms.refreshFormsView')!();
+      assert.equal(refreshCount, 1);
+
+      // 3. buildApp, runApp, stopApp, and custom editor runProjectAction delegate through WinFormsProjectRunner
+      await mockState.registeredCommands.get('winforms.buildApp')!(mainItem);
+      await mockState.registeredCommands.get('winforms.runApp')!(mainItem);
+      await mockState.registeredCommands.get('winforms.stopApp')!();
+      assert.equal(spawnedCommands.length, 2);
+      assert.equal(spawnedCommands[0].command, 'dotnet');
+      assert.deepEqual(spawnedCommands[0].args, ['build', csprojPath]);
+      assert.equal(spawnedCommands[1].command, 'dotnet');
+      assert.deepEqual(spawnedCommands[1].args, ['run', '--project', csprojPath]);
+      assert.equal(killedCount, 1);
+
+      // Webview runProjectAction invokes projectRunner directly via customEditor callback
+      const mainDoc = createMockTextDocument(
+        MockUri.file(mainDesignerPath),
+        fs.readFileSync(mainDesignerPath, 'utf8')
+      );
+      const panel = createMockWebviewPanel();
+      await provider.resolveCustomTextEditor(
+        mainDoc as unknown as vscodeTypes.TextDocument,
+        panel as unknown as vscodeTypes.WebviewPanel,
+        {} as vscodeTypes.CancellationToken
+      );
+      panel._sendFromWebview({ type: 'runProjectAction', action: 'build' });
+      await new Promise((r) => setTimeout(r, 25));
+      assert.equal(spawnedCommands.length, 3);
+      assert.deepEqual(spawnedCommands[2].args, ['build', csprojPath]);
+      panel._dispose();
+
+      // 4. deleteForm removes .cs, .Designer.cs, .resx, and culture .resx files after modal confirmation
+      const resxPath = path.join(projDir, 'MainForm.resx');
+      const deResxPath = path.join(projDir, 'MainForm.de.resx');
+      fs.writeFileSync(resxPath, '<root/>', 'utf8');
+      fs.writeFileSync(deResxPath, '<root/>', 'utf8');
+
+      // Cancelled delete keeps files intact
+      mockState.nextWarningChoice = undefined;
+      await mockState.registeredCommands.get('winforms.deleteForm')!(mainItem);
+      assert.equal(fs.existsSync(mainDesignerPath), true);
+
+      // Confirmed delete removes all sibling files
+      mockState.nextWarningChoice = 'Delete';
+      await mockState.registeredCommands.get('winforms.deleteForm')!(mainItem);
+      assert.equal(fs.existsSync(path.join(projDir, 'MainForm.cs')), false);
+      assert.equal(fs.existsSync(mainDesignerPath), false);
+      assert.equal(fs.existsSync(resxPath), false);
+      assert.equal(fs.existsSync(deResxPath), false);
     });
   });
 });

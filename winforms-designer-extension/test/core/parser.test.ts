@@ -903,4 +903,153 @@ partial class TlpForm
     const gen2 = generateDesignerCs(parseDesignerCs(gen1));
     assert.equal(gen2, gen1);
   });
+
+  it('parses full and shorthand DataBindings.Add calls without duplicating into rawStatements and detects custom base classes', () => {
+    const src = `namespace BindApp;
+
+partial class OrderDialog : MyApp.Forms.BaseDialogForm
+{
+    #region Windows Form Designer generated code
+    private void InitializeComponent()
+    {
+        this.textBoxName = new System.Windows.Forms.TextBox();
+        this.textBoxEmail = new System.Windows.Forms.TextBox();
+        this.textBoxComplex = new System.Windows.Forms.TextBox();
+        this.bindingSource1 = new System.Windows.Forms.BindingSource();
+        ((System.ComponentModel.ISupportInitialize)(this.bindingSource1)).BeginInit();
+        this.SuspendLayout();
+        this.textBoxName.DataBindings.Add(new System.Windows.Forms.Binding("Text", this.bindingSource1, "Name", true, System.Windows.Forms.DataSourceUpdateMode.OnPropertyChanged));
+        this.textBoxName.Location = new System.Drawing.Point(20, 20);
+        this.textBoxName.Name = "textBoxName";
+        this.textBoxName.Size = new System.Drawing.Size(200, 23);
+        this.textBoxEmail.DataBindings.Add("Text", this.bindingSource1, "Email");
+        this.textBoxEmail.Location = new System.Drawing.Point(20, 52);
+        this.textBoxEmail.Name = "textBoxEmail";
+        this.textBoxEmail.Size = new System.Drawing.Size(200, 23);
+        this.textBoxComplex.DataBindings.Add(new System.Windows.Forms.Binding("Text", this.viewModel.Customer, "Phone", true));
+        this.textBoxComplex.Location = new System.Drawing.Point(20, 84);
+        this.textBoxComplex.Name = "textBoxComplex";
+        this.textBoxComplex.Size = new System.Drawing.Size(200, 23);
+        this.ClientSize = new System.Drawing.Size(400, 200);
+        this.Controls.Add(this.textBoxName);
+        this.Controls.Add(this.textBoxEmail);
+        this.Controls.Add(this.textBoxComplex);
+        this.Name = "OrderDialog";
+        this.Text = "Order";
+        ((System.ComponentModel.ISupportInitialize)(this.bindingSource1)).EndInit();
+        this.ResumeLayout(false);
+        this.PerformLayout();
+    }
+    #endregion
+
+    private System.Windows.Forms.TextBox textBoxName;
+    private System.Windows.Forms.TextBox textBoxEmail;
+    private System.Windows.Forms.TextBox textBoxComplex;
+    private System.Windows.Forms.BindingSource bindingSource1;
+}
+`;
+    const doc = parseDesignerCs(src);
+    assert.equal(doc.baseType, 'Form');
+    assert.equal(doc.customBaseClass, 'BaseDialogForm');
+
+    const tbName = doc.form.children.find((c) => c.name === 'textBoxName')!;
+    assert.equal(tbName.rawStatements, undefined);
+    assert.equal(tbName.dataBindings?.length, 1);
+    assert.equal(tbName.dataBindings![0].propertyName, 'Text');
+    assert.equal(tbName.dataBindings![0].dataSource, 'bindingSource1');
+    assert.equal(tbName.dataBindings![0].dataMember, 'Name');
+    assert.equal(tbName.dataBindings![0].formattingEnabled, true);
+    assert.ok(tbName.dataBindings![0].rawExpression?.includes('DataSourceUpdateMode.OnPropertyChanged'));
+
+    const tbEmail = doc.form.children.find((c) => c.name === 'textBoxEmail')!;
+    assert.equal(tbEmail.rawStatements, undefined);
+    assert.equal(tbEmail.dataBindings?.length, 1);
+    assert.equal(tbEmail.dataBindings![0].propertyName, 'Text');
+    assert.equal(tbEmail.dataBindings![0].dataSource, 'bindingSource1');
+    assert.equal(tbEmail.dataBindings![0].dataMember, 'Email');
+    assert.equal(tbEmail.dataBindings![0].formattingEnabled, undefined);
+
+    const tbComplex = doc.form.children.find((c) => c.name === 'textBoxComplex')!;
+    assert.equal(tbComplex.dataBindings![0].dataSource, 'this.viewModel.Customer');
+
+    // Double round-trip preserves raw expressions verbatim
+    const gen1 = generateDesignerCs(doc);
+    assert.ok(
+      gen1.includes(
+        'this.textBoxName.DataBindings.Add(new System.Windows.Forms.Binding("Text", this.bindingSource1, "Name", true, System.Windows.Forms.DataSourceUpdateMode.OnPropertyChanged));'
+      )
+    );
+    assert.ok(
+      gen1.includes('this.textBoxEmail.DataBindings.Add("Text", this.bindingSource1, "Email");')
+    );
+    const gen2 = generateDesignerCs(parseDesignerCs(gen1));
+    assert.equal(gen2, gen1);
+
+    // Editing a binding entry regenerates cleanly using new System.Windows.Forms.Binding(...)
+    const edited = structuredClone(doc);
+    const editedTb = edited.form.children.find((c) => c.name === 'textBoxEmail')!;
+    editedTb.dataBindings![0].dataMember = 'WorkEmail';
+    editedTb.dataBindings![0].formattingEnabled = true;
+    const genEdited = generateDesignerCs(edited);
+    assert.ok(
+      genEdited.includes(
+        'this.textBoxEmail.DataBindings.Add(new System.Windows.Forms.Binding("Text", this.bindingSource1, "WorkEmail", true));'
+      )
+    );
+
+    // Editing a 5-arg binding preserves extraArgs (e.g. DataSourceUpdateMode)
+    const edited5 = structuredClone(doc);
+    const tb5 = edited5.form.children.find((c) => c.name === 'textBoxName')!;
+    tb5.dataBindings![0].dataMember = 'FullName';
+    delete tb5.dataBindings![0].rawExpression;
+    const gen5 = generateDesignerCs(edited5);
+    assert.ok(
+      gen5.includes(
+        'this.textBoxName.DataBindings.Add(new System.Windows.Forms.Binding("Text", this.bindingSource1, "FullName", true, System.Windows.Forms.DataSourceUpdateMode.OnPropertyChanged));'
+      )
+    );
+  });
+
+  it('hoists mid-method local variables referenced by DataBindings and keeps unqualified locals unqualified on edit', () => {
+    const src = `namespace LocalBindApp
+{
+    partial class LocalBindForm
+    {
+        #region Windows Form Designer generated code
+        private void InitializeComponent()
+        {
+            this.textBox1 = new System.Windows.Forms.TextBox();
+            this.SuspendLayout();
+            this.textBox1.Location = new System.Drawing.Point(10, 10);
+            var localSource = new System.Windows.Forms.BindingSource();
+            this.textBox1.DataBindings.Add(new System.Windows.Forms.Binding("Text", localSource, "Title", true, System.Windows.Forms.DataSourceUpdateMode.OnPropertyChanged));
+            this.textBox1.Name = "textBox1";
+            this.ClientSize = new System.Drawing.Size(300, 120);
+            this.Controls.Add(this.textBox1);
+            this.Name = "LocalBindForm";
+            this.ResumeLayout(false);
+        }
+        #endregion
+        private System.Windows.Forms.TextBox textBox1;
+    }
+}
+`;
+    const doc = parseDesignerCs(src);
+    const gen = generateDesignerCs(doc);
+    const declIdx = gen.indexOf('var localSource = new System.Windows.Forms.BindingSource();');
+    const bindIdx = gen.indexOf('this.textBox1.DataBindings.Add(');
+    assert.ok(declIdx >= 0 && bindIdx > declIdx, 'Local source declaration must be hoisted before DataBindings.Add');
+
+    const edited = structuredClone(doc);
+    const tb = edited.form.children.find((c) => c.name === 'textBox1')!;
+    tb.dataBindings![0].dataMember = 'UpdatedTitle';
+    delete tb.dataBindings![0].rawExpression;
+    const genEdited = generateDesignerCs(edited);
+    assert.ok(
+      genEdited.includes(
+        'this.textBox1.DataBindings.Add(new System.Windows.Forms.Binding("Text", localSource, "UpdatedTitle", true, System.Windows.Forms.DataSourceUpdateMode.OnPropertyChanged));'
+      ),
+      'Unqualified local dataSource and extraArgs must be preserved on edit'
+    );
+  });
 });

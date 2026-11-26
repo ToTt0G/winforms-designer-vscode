@@ -7,7 +7,9 @@ import {
   parseCodeBehind,
   parseDesignerCs,
   scaffoldFormFiles,
+  scaffoldWinFormsProject,
   type FormTemplateId,
+  type WinFormsTargetFramework,
 } from '../../src/core';
 
 describe('scaffold (scaffoldFormFiles)', () => {
@@ -184,5 +186,49 @@ describe('scaffold (scaffoldFormFiles)', () => {
     const gen1 = generateDesignerCs(doc);
     const gen2 = generateDesignerCs(parseDesignerCs(gen1));
     assert.equal(gen2, gen1);
+  });
+
+  it('scaffolds complete runnable WinForms projects for net10/net9/net8 and net48', () => {
+    const modernTfms: WinFormsTargetFramework[] = [
+      'net10.0-windows',
+      'net9.0-windows',
+      'net8.0-windows',
+    ];
+    for (const tfm of modernTfms) {
+      const files = scaffoldWinFormsProject({
+        projectName: 'InventoryApp',
+        targetFramework: tfm,
+        template: 'dashboard',
+        eol: '\n',
+      });
+      assert.ok(files.csprojContent.includes(`<TargetFramework>${tfm}</TargetFramework>`));
+      assert.ok(files.csprojContent.includes('<UseWindowsForms>true</UseWindowsForms>'));
+      assert.ok(files.csprojContent.includes('<OutputType>WinExe</OutputType>'));
+      assert.ok(files.csprojContent.includes('<ImplicitUsings>enable</ImplicitUsings>'));
+      assert.ok(files.csprojContent.includes('<Nullable>enable</Nullable>'));
+      assert.ok(files.programCsContent.includes('ApplicationConfiguration.Initialize();'));
+      assert.ok(files.programCsContent.includes('namespace InventoryApp;'));
+
+      const doc = parseDesignerCs(files.designerCsContent);
+      assert.equal(doc.className, 'MainForm');
+      assert.equal(doc.namespaceName, 'InventoryApp');
+      assert.equal(doc.parseDiagnostics.length, 0);
+      assert.deepEqual(auditDesignDocument(doc), []);
+    }
+
+    const net48 = scaffoldWinFormsProject({
+      projectName: 'LegacyApp',
+      targetFramework: 'net48',
+      template: 'dialog',
+      eol: '\r\n',
+    });
+    assert.ok(net48.csprojContent.includes('<TargetFramework>net48</TargetFramework>'));
+    assert.ok(net48.csprojContent.includes('<UseWindowsForms>true</UseWindowsForms>'));
+    assert.ok(net48.csprojContent.includes('<OutputType>WinExe</OutputType>'));
+    assert.ok(!net48.csprojContent.includes('<ImplicitUsings>'));
+    assert.ok(!net48.csprojContent.includes('<Nullable>'));
+    assert.ok(net48.programCsContent.includes('Application.EnableVisualStyles();'));
+    assert.ok(net48.formCsContent.includes('namespace LegacyApp\r\n{'));
+    assert.equal(parseDesignerCs(net48.designerCsContent).parseDiagnostics.length, 0);
   });
 });

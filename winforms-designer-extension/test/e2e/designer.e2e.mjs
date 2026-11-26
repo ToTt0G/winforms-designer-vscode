@@ -224,6 +224,10 @@ async function initDesigner(page, serverUrl, initPayload) {
       codeBehindHandlers: payload.codeBehindHandlers,
       themeKind: payload.themeKind,
       resourceDataUris: payload.resourceDataUris || {},
+      ...(payload.hasProject !== undefined ? { hasProject: payload.hasProject } : {}),
+      ...(payload.availableCultures !== undefined ? { availableCultures: payload.availableCultures } : {}),
+      ...(payload.activeCulture !== undefined ? { activeCulture: payload.activeCulture } : {}),
+      ...(payload.cultureStrings !== undefined ? { cultureStrings: payload.cultureStrings } : {}),
     });
     window.__WINFORMS_DESIGNER__.clearSentMessages();
   }, initPayload);
@@ -1080,6 +1084,336 @@ async function runSuite() {
         starMsgs = (await getSentMessages(page)).filter((m) => m.type === 'starPromptAction');
         assert.deepEqual(starMsgs, [{ type: 'starPromptAction', action: expectedAction }]);
       }
+    });
+
+    // -----------------------------------------------------------------------
+    // 12. Right-Click Context Menu Delete (Canvas Control + Component Tray)
+    // -----------------------------------------------------------------------
+    await runTest('12. Right-click context menu Delete works on both canvas controls and Component Tray', async () => {
+      const payload = makeOrderInitPayload();
+      await initDesigner(page, server.url, payload);
+
+      const doc0 = (await getDesignerState(page)).document;
+      const btnApprove = findNodeByName(doc0, 'btnApprove');
+      assert.ok(btnApprove);
+
+      // Right-click btnApprove on the canvas and click Delete in the context menu
+      await clearSentMessages(page);
+      await page.locator(`.wd-canvas [data-node-id="${btnApprove.id}"]`).click({ button: 'right' });
+      const canvasDel = page.locator('.wd-menu [role="menuitem"]', { hasText: 'Delete' });
+      await canvasDel.waitFor({ state: 'visible', timeout: 5000 });
+      await canvasDel.click();
+      await waitForApplyDocumentCount(page, 1);
+
+      let stateAfter = await getDesignerState(page);
+      assert.equal(findNodeByName(stateAfter.document, 'btnApprove'), null, 'Right-click Delete on canvas must delete btnApprove');
+
+      // Undo restores btnApprove
+      await clearSentMessages(page);
+      await page.keyboard.press('Control+z');
+      await waitForApplyDocumentCount(page, 1);
+      stateAfter = await getDesignerState(page);
+      assert.ok(findNodeByName(stateAfter.document, 'btnApprove'), 'Undo should restore btnApprove');
+
+      // Right-click refreshTimer in the Component Tray and click Delete
+      await clearSentMessages(page);
+      const timerChip = page.locator('.wd-tray-items .wd-chip', { hasText: 'refreshTimer' });
+      await timerChip.click({ button: 'right' });
+      const trayDel = page.locator('.wd-menu [role="menuitem"]', { hasText: 'Delete' });
+      await trayDel.waitFor({ state: 'visible', timeout: 5000 });
+      await trayDel.click();
+      await waitForApplyDocumentCount(page, 1);
+
+      stateAfter = await getDesignerState(page);
+      assert.equal(
+        findNodeByName(stateAfter.document, 'refreshTimer'),
+        null,
+        'Right-click Delete in Component Tray must delete refreshTimer'
+      );
+    });
+
+    // -----------------------------------------------------------------------
+    // 13. On-Canvas Strip "Type Here" Editing & Ctrl+Drag Duplicate
+    // -----------------------------------------------------------------------
+    await runTest('13. On-canvas MenuStrip "Type Here" add/rename/delete & Ctrl+Drag duplicate', async () => {
+      const payload = makeOrderInitPayload();
+      await initDesigner(page, server.url, payload);
+
+      const doc0 = (await getDesignerState(page)).document;
+      const menuStrip = findNodeByName(doc0, 'menuStrip1');
+      assert.ok(menuStrip);
+
+      // Click "Type Here" on MenuStrip to add a new menu item
+      await clearSentMessages(page);
+      const addTrigger = page.locator(`.wd-canvas [data-strip-add="${menuStrip.id}"]`);
+      await addTrigger.waitFor({ state: 'visible' });
+      await addTrigger.click();
+      const addInput = page.locator('[data-testid="strip-inline-add"]');
+      await addInput.waitFor({ state: 'visible' });
+      await addInput.fill('Reports');
+      await addInput.press('Enter');
+      await waitForApplyDocumentCount(page, 1);
+
+      let st = await getDesignerState(page);
+      let ms = findNodeByName(st.document, 'menuStrip1');
+      let reportsItem = (ms.stripItems || []).find((i) => i.text === 'Reports');
+      assert.ok(reportsItem, 'MenuStrip should include newly added "Reports" item');
+
+      // Double-click to rename to "Analytics"
+      await clearSentMessages(page);
+      const reportsEl = page.locator(`.wd-canvas [data-strip-item="${reportsItem.id}"]`);
+      await reportsEl.dblclick();
+      const editInput = page.locator('[data-testid="strip-inline-edit"]');
+      await editInput.waitFor({ state: 'visible' });
+      await editInput.fill('Analytics');
+      await editInput.press('Enter');
+      await waitForApplyDocumentCount(page, 1);
+
+      st = await getDesignerState(page);
+      ms = findNodeByName(st.document, 'menuStrip1');
+      const renamed = (ms.stripItems || []).find((i) => i.id === reportsItem.id);
+      assert.equal(renamed?.text, 'Analytics', 'Renamed MenuStrip item should have text "Analytics"');
+
+      // Click hover delete button on the item
+      await clearSentMessages(page);
+      await page.locator(`.wd-canvas [data-strip-item="${reportsItem.id}"]`).hover();
+      await page.locator(`.wd-canvas [data-strip-del="${reportsItem.id}"]`).click();
+      await waitForApplyDocumentCount(page, 1);
+
+      st = await getDesignerState(page);
+      ms = findNodeByName(st.document, 'menuStrip1');
+      assert.equal((ms.stripItems || []).some((i) => i.id === reportsItem.id), false, 'Deleted MenuStrip item should be gone');
+
+      // Ctrl+Drag btnApprove -> leaves original in place and creates a fresh copy
+      const btnApprove = findNodeByName(st.document, 'btnApprove');
+      const origLoc = { ...btnApprove.properties.Location };
+      const btnLocator = page.locator(`.wd-canvas [data-node-id="${btnApprove.id}"]`);
+      const box = await assertNonZeroBox(btnLocator, 'btnApprove for Ctrl+Drag');
+
+      await clearSentMessages(page);
+      await page.keyboard.down('Control');
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 - 48, box.y + box.height / 2, { steps: 6 });
+      await assertNonZeroBox(page.locator('[data-testid="drag-copy-badge"]'), 'Ctrl+Drag copy badge');
+      await page.mouse.up();
+      await page.keyboard.up('Control');
+      await waitForApplyDocumentCount(page, 1);
+
+      st = await getDesignerState(page);
+      const origAfter = findNodeByName(st.document, 'btnApprove');
+      assert.deepEqual(origAfter.properties.Location, origLoc, 'Original btnApprove must stay at its original Location after Ctrl+Drag');
+      assert.equal(st.selection.length, 1);
+      assert.notEqual(st.selection[0], btnApprove.id, 'Selection after Ctrl+Drag should move to the newly created copy');
+    });
+
+    // -----------------------------------------------------------------------
+    // 14. Audit Auto-Fix ("Fix" & "Fix All", including High-DPI AutoScaleMode.None)
+    // -----------------------------------------------------------------------
+    await runTest('14. Audit Auto-Fix fixes AutoScaleMode.None and missing AcceptButton in one undo step', async () => {
+      const dpiDialogCs = `namespace DpiDemo
+{
+    partial class SettingsDialog
+    {
+        private System.ComponentModel.IContainer components = null;
+
+        #region Windows Form Designer generated code
+        private void InitializeComponent()
+        {
+            this.btnOk = new System.Windows.Forms.Button();
+            this.SuspendLayout();
+            this.btnOk.Location = new System.Drawing.Point(180, 120);
+            this.btnOk.Name = "btnOk";
+            this.btnOk.Size = new System.Drawing.Size(90, 28);
+            this.btnOk.TabIndex = 0;
+            this.btnOk.Text = "OK";
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.None;
+            this.ClientSize = new System.Drawing.Size(300, 170);
+            this.Controls.Add(this.btnOk);
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
+            this.Name = "SettingsDialog";
+            this.Text = "Settings";
+            this.ResumeLayout(false);
+        }
+        #endregion
+
+        private System.Windows.Forms.Button btnOk;
+    }
+}
+`;
+      const doc = parseDesignerCs(dpiDialogCs);
+      await initDesigner(page, server.url, {
+        document: doc,
+        settings: { ...DEFAULT_SETTINGS },
+        fileName: 'SettingsDialog.Designer.cs',
+        hasCodeBehind: false,
+        codeBehindHandlers: [],
+        themeKind: 'dark',
+        resourceDataUris: {},
+      });
+
+      await page.locator('[data-testid="toolbar-audit-btn"]').click();
+      await page.locator('[data-testid="audit-item"]', { hasText: 'High-DPI scaling disabled' }).waitFor({ state: 'visible' });
+      const fixAllBtn = page.locator('[data-testid="audit-fix-all-btn"]');
+      await fixAllBtn.waitFor({ state: 'visible' });
+
+      await clearSentMessages(page);
+      await fixAllBtn.click();
+      await waitForApplyDocumentCount(page, 1);
+
+      const st = await getDesignerState(page);
+      assert.equal(st.document.form.properties.AutoScaleMode?.value, 'Font', 'Fix All must upgrade AutoScaleMode from None to Font');
+      const generated = generateDesignerCs(st.document);
+      assert.ok(generated.includes('this.AcceptButton = this.btnOk;'), 'Fix All must wire AcceptButton to btnOk');
+      assert.ok(generated.includes('System.Windows.Forms.AutoScaleMode.Font'), 'Generated C# must contain AutoScaleMode.Font');
+    });
+
+    // -----------------------------------------------------------------------
+    // 15. Culture Switcher, Inherited Read-Only Controls, DataBindings & Run Button
+    // -----------------------------------------------------------------------
+    await runTest('15. Culture switcher, inherited read-only protection, DataBindings editor & Run button', async () => {
+      const payload = makeOrderInitPayload({
+        hasProject: true,
+        availableCultures: ['default', 'de'],
+        activeCulture: 'default',
+        cultureStrings: {},
+      });
+      // Mark btnExport as inherited from a base form to verify read-only protection
+      const inheritedBtn = findNodeByName(payload.document, 'btnExport');
+      inheritedBtn.inherited = true;
+      inheritedBtn.inheritedFrom = 'BaseOrderForm';
+
+      await initDesigner(page, server.url, payload);
+
+      // Run button is visible and emits runProjectAction
+      const runBtn = page.locator('[data-testid="toolbar-run-btn"]');
+      await assertNonZeroBox(runBtn, 'Toolbar Run button');
+      await clearSentMessages(page);
+      await runBtn.click();
+      const runMsgs = (await getSentMessages(page)).filter((m) => m.type === 'runProjectAction');
+      assert.deepEqual(runMsgs, [{ type: 'runProjectAction', action: 'run' }]);
+
+      // Inherited control shows badge, read-only Property Grid banner, and cannot be deleted
+      await assertNonZeroBox(
+        page.locator(`.wd-canvas [data-inherited-badge="${inheritedBtn.id}"]`),
+        'Canvas inherited badge'
+      );
+      await page.locator(`.wd-canvas [data-node-id="${inheritedBtn.id}"]`).click();
+      await clearSentMessages(page);
+      await page.keyboard.press('Delete');
+      const afterBlockedDelete = await getDesignerState(page);
+      assert.ok(findNodeByName(afterBlockedDelete.document, 'btnExport'), 'Inherited control must NOT be deletable');
+      assert.equal((await getSentMessages(page)).filter((m) => m.type === 'applyDocument').length, 0);
+
+      // Switch culture to "de" -> emits switchCulture -> host replies cultureChanged -> canvas displays German text
+      await clearSentMessages(page);
+      await page.locator('[data-testid="toolbar-culture-select"]').selectOption('de');
+      const switchMsgs = (await getSentMessages(page)).filter((m) => m.type === 'switchCulture');
+      assert.deepEqual(switchMsgs, [{ type: 'switchCulture', culture: 'de' }]);
+
+      await page.evaluate(() => {
+        window.__WINFORMS_DESIGNER__.dispatchHostMessage({
+          type: 'cultureChanged',
+          activeCulture: 'de',
+          availableCultures: ['default', 'de'],
+          cultureStrings: { '$this.Text': 'Auftragsmanager', 'btnApplyFilter.Text': 'Filter anwenden' },
+        });
+      });
+      await assertNonZeroBox(
+        page.locator('.wd-canvas [data-form-caption]', { hasText: 'Auftragsmanager' }),
+        'Localized German form title'
+      );
+      await assertNonZeroBox(
+        page.locator('.wd-canvas .wf-button', { hasText: 'Filter anwenden' }),
+        'Localized German button text'
+      );
+
+      // Switch back to default culture, then add a DataBinding on txtSearch
+      await page.locator('[data-testid="toolbar-culture-select"]').selectOption('default');
+      await page.evaluate(() => {
+        window.__WINFORMS_DESIGNER__.dispatchHostMessage({
+          type: 'cultureChanged',
+          activeCulture: 'default',
+          availableCultures: ['default', 'de'],
+          cultureStrings: {},
+        });
+      });
+
+      const txtSearch = findNodeByName((await getDesignerState(page)).document, 'txtSearch');
+      await page.locator(`.wd-canvas [data-node-id="${txtSearch.id}"]`).click();
+      const dbRow = page.locator('.wd-props [data-property="DataBindings"]');
+      await dbRow.scrollIntoViewIfNeeded();
+      await dbRow.locator('button').click();
+
+      const dbModal = page.locator('[data-testid="databindings-editor"]');
+      await assertNonZeroBox(dbModal, 'DataBindings editor modal');
+      await dbModal.locator('.wd-list-toolbar button', { hasText: 'Add' }).click();
+      await page.locator('[data-testid="databinding-property"]').fill('Text');
+      await page.locator('[data-testid="databinding-source"]').fill('orderBindingSource');
+      await page.locator('[data-testid="databinding-member"]').fill('CustomerName');
+
+      await clearSentMessages(page);
+      await page.locator('.wd-modal-foot button', { hasText: 'OK' }).click();
+      await waitForApplyDocumentCount(page, 1);
+
+      const dbDoc = (await getDesignerState(page)).document;
+      const updatedTxt = findNodeByName(dbDoc, 'txtSearch');
+      assert.equal(updatedTxt.dataBindings?.length, 1);
+      const dbCs = generateDesignerCs(dbDoc);
+      assert.ok(
+        dbCs.includes('this.txtSearch.DataBindings.Add(new System.Windows.Forms.Binding("Text",'),
+        'Generated C# must emit txtSearch.DataBindings.Add(...)'
+      );
+    });
+
+    // -----------------------------------------------------------------------
+    // 16. Live Preview Pixel-Fidelity Interactivity (MenuStrip Dropdown, Esc, Grid, Spinner)
+    // -----------------------------------------------------------------------
+    await runTest('16. Live Preview: zero fake grid rows, interactive MenuStrip dropdown, Escape & NumericUpDown spinner', async () => {
+      const payload = makeOrderInitPayload();
+      await initDesigner(page, server.url, payload);
+
+      await page.locator('[data-testid="toolbar-preview-btn"]').click();
+      const preview = page.locator('.wd-preview');
+      await assertNonZeroBox(preview, 'Preview modal');
+
+      // Zero fake DataGridView rows (AllowUserToAddRows = false) and zero design-time Type Here placeholders
+      assert.equal(await preview.locator('.wf-dg-row').count(), 0, 'DataGridView with AllowUserToAddRows=false must render 0 empty rows');
+      assert.equal(await preview.locator('.wf-strip-add').count(), 0, 'Preview must never show design-time "Type Here" / "+" placeholders');
+
+      // Click "File" menu -> opens native WinForms dropdown with New Order, Export CSV..., Exit
+      await preview.locator('.wf-strip-item.menu', { hasText: 'File' }).click();
+      const dropdown = preview.locator('.wf-dropdown');
+      await assertNonZeroBox(dropdown, 'MenuStrip File dropdown');
+      await assertNonZeroBox(dropdown.locator('.wf-dd-item', { hasText: 'New Order' }), 'File > New Order');
+      await assertNonZeroBox(dropdown.locator('.wf-dd-item', { hasText: 'Exit' }), 'File > Exit');
+
+      // First Escape closes ONLY the dropdown menu, keeping Preview open
+      await page.keyboard.press('Escape');
+      await dropdown.waitFor({ state: 'detached', timeout: 5000 });
+      await assertNonZeroBox(preview, 'Preview modal stays open after first Escape');
+
+      // Re-open File menu and click Exit -> closes dropdown and updates footer status
+      await preview.locator('.wf-strip-item.menu', { hasText: 'File' }).click();
+      await dropdown.waitFor({ state: 'visible', timeout: 5000 });
+      await dropdown.locator('.wf-dd-item', { hasText: 'Exit' }).click();
+      await dropdown.waitFor({ state: 'detached', timeout: 5000 });
+      const footText = (await preview.locator('.wd-preview-foot').textContent()).trim();
+      assert.ok(footText.includes('exitToolStripMenuItem'), `Preview footer should report exitToolStripMenuItem click, got "${footText}"`);
+
+      // Switch to Batch Summary and click NumericUpDown up-spinner -> increments 100 -> 101
+      const doc0 = (await getDesignerState(page)).document;
+      const numBatchLimit = findNodeByName(doc0, 'numBatchLimit');
+      await preview.locator('.wf-tab-header', { hasText: 'Batch Summary' }).click();
+      const numNode = preview.locator(`[data-node-id="${numBatchLimit.id}"]`);
+      const numInput = numNode.locator('input.wf-live-input');
+      assert.equal(await numInput.inputValue(), '100');
+      await numNode.locator('.wf-spin > span').first().click();
+      assert.equal(await numInput.inputValue(), '101', 'Clicking NumericUpDown up spinner should increment 100 -> 101');
+
+      // Close Preview via Escape now that no dropdown is open
+      await page.keyboard.press('Escape');
+      await preview.waitFor({ state: 'detached', timeout: 5000 });
     });
 
     await context.close();

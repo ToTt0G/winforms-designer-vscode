@@ -5,6 +5,9 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
   detectProjectContext,
+  findBaseDesignerFile,
+  findCultureResxFiles,
+  isValidCultureTag,
   pickNextAvailableFormName,
   resolveFormFiles,
   sanitizeNamespaceSegment,
@@ -245,6 +248,58 @@ describe('formResolver', () => {
       assert.equal(pickNextAvailableFormName(tempDir, 'UserControl', 1), 'UserControl1');
       fs.writeFileSync(path.join(tempDir, 'UserControl1.cs'), '', 'utf8');
       assert.equal(pickNextAvailableFormName(tempDir, 'UserControl', 1), 'UserControl2');
+    });
+  });
+
+  describe('culture .resx discovery & base form lookup', () => {
+    it('discovers valid BCP-47 culture .resx files and ignores invalid or traversal names', () => {
+      fs.writeFileSync(path.join(tempDir, 'MainForm.resx'), '<root/>', 'utf8');
+      fs.writeFileSync(path.join(tempDir, 'MainForm.de.resx'), '<root/>', 'utf8');
+      fs.writeFileSync(path.join(tempDir, 'MainForm.fr-FR.resx'), '<root/>', 'utf8');
+      fs.writeFileSync(path.join(tempDir, 'MainForm.zh-Hans.resx'), '<root/>', 'utf8');
+      fs.writeFileSync(path.join(tempDir, 'MainForm.notacult.resx'), '<root/>', 'utf8');
+      fs.writeFileSync(path.join(tempDir, 'OtherForm.es.resx'), '<root/>', 'utf8');
+
+      const found = findCultureResxFiles(tempDir, 'MainForm');
+      assert.deepEqual(Object.keys(found).sort(), ['de', 'fr-FR', 'zh-Hans']);
+      assert.equal(found['de'], path.join(tempDir, 'MainForm.de.resx'));
+      assert.equal(found['fr-FR'], path.join(tempDir, 'MainForm.fr-FR.resx'));
+      assert.equal(found['zh-Hans'], path.join(tempDir, 'MainForm.zh-Hans.resx'));
+
+      assert.equal(isValidCultureTag('de'), true);
+      assert.equal(isValidCultureTag('fr-FR'), true);
+      assert.equal(isValidCultureTag('zh-Hans'), true);
+      assert.equal(isValidCultureTag('sr-Latn-RS'), true);
+      assert.equal(isValidCultureTag('default'), false);
+      assert.equal(isValidCultureTag('../etc'), false);
+      assert.equal(isValidCultureTag('de/../../x'), false);
+      assert.equal(isValidCultureTag('de..fr'), false);
+      assert.equal(isValidCultureTag(''), false);
+    });
+
+    it('finds base form Designer files case-insensitively while ignoring bin/obj and confining to allowedRoots', () => {
+      const binDir = path.join(tempDir, 'bin', 'Debug');
+      const baseDir = path.join(tempDir, 'Base');
+      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winforms-outside-'));
+      try {
+        fs.mkdirSync(binDir, { recursive: true });
+        fs.mkdirSync(baseDir, { recursive: true });
+        // File in bin/ must be ignored
+        fs.writeFileSync(path.join(binDir, 'BaseDialog.Designer.cs'), 'partial class BaseDialog {}', 'utf8');
+        const realBase = path.join(baseDir, 'basedialog.designer.cs');
+        fs.writeFileSync(realBase, 'partial class BaseDialog {}', 'utf8');
+        fs.writeFileSync(path.join(outsideDir, 'SecretBase.Designer.cs'), 'partial class SecretBase {}', 'utf8');
+
+        const found = findBaseDesignerFile('BaseDialog', [tempDir], [tempDir]);
+        assert.equal(found, fs.realpathSync(realBase));
+
+        // Reject traversal names
+        assert.equal(findBaseDesignerFile('../SecretBase', [tempDir], [tempDir]), undefined);
+        // Outside allowedRoots cannot be found
+        assert.equal(findBaseDesignerFile('SecretBase', [outsideDir], [tempDir]), undefined);
+      } finally {
+        fs.rmSync(outsideDir, { recursive: true, force: true });
+      }
     });
   });
 });

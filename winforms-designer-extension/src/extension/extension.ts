@@ -8,11 +8,67 @@ import {
 } from './customEditor';
 import {
   detectProjectContext,
+  findCultureResxFiles,
   formFilesExistInDirectory,
   pickNextAvailableFormName,
   resolveFormFiles,
+  sameFilePath,
   validateCSharpIdentifier,
 } from './formResolver';
+import { WinFormsExplorerProvider } from './formsTreeView';
+import {
+  WinFormsProjectRunner,
+  type WinFormsProjectRunnerOptions,
+} from './projectRunner';
+
+const TARGET_FRAMEWORK_OPTIONS: ReadonlyArray<{
+  label: string;
+  description: string;
+  tfm: coreApi.WinFormsTargetFramework;
+}> = [
+  {
+    label: 'net10.0-windows',
+    description: '.NET 10 (Windows)',
+    tfm: 'net10.0-windows',
+  },
+  {
+    label: 'net9.0-windows',
+    description: '.NET 9 (Windows)',
+    tfm: 'net9.0-windows',
+  },
+  {
+    label: 'net8.0-windows',
+    description: '.NET 8 (Windows LTS)',
+    tfm: 'net8.0-windows',
+  },
+  {
+    label: 'net48',
+    description: '.NET Framework 4.8',
+    tfm: 'net48',
+  },
+];
+
+function extractUriFromCommandArg(arg: unknown): vscode.Uri | undefined {
+  if (!arg || typeof arg !== 'object') {
+    return undefined;
+  }
+  if ('scheme' in arg && 'fsPath' in arg) {
+    return arg as vscode.Uri;
+  }
+  if ('designerUri' in arg) {
+    const u = (arg as { designerUri?: unknown }).designerUri;
+    if (u && typeof u === 'object' && 'scheme' in u && 'fsPath' in u) {
+      return u as vscode.Uri;
+    }
+  }
+  if ('resourceUri' in arg) {
+    const u = (arg as { resourceUri?: unknown }).resourceUri;
+    if (u && typeof u === 'object' && 'scheme' in u && 'fsPath' in u) {
+      return u as vscode.Uri;
+    }
+  }
+  return undefined;
+}
 
 const FORM_DECLARATION_FALLBACK_RE =
   /\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:(?:global::)?System\.Windows\.Forms\.)?(Form|UserControl)\b/;
@@ -115,7 +171,8 @@ function resolveTargetFolder(
 
 export function activateWithDeps(
   context: vscode.ExtensionContext,
-  coreDeps?: Partial<CoreDependencies>
+  coreDeps?: Partial<CoreDependencies>,
+  runnerOptions?: WinFormsProjectRunnerOptions
 ): WinFormsCustomEditorProvider {
   const core: CoreDependencies = {
     parseDesignerCs: coreDeps?.parseDesignerCs ?? coreApi.parseDesignerCs,
@@ -124,12 +181,56 @@ export function activateWithDeps(
     ensureEventHandlerInCodeBehind:
       coreDeps?.ensureEventHandlerInCodeBehind ?? coreApi.ensureEventHandlerInCodeBehind,
     parseResx: coreDeps?.parseResx ?? coreApi.parseResx,
+    createEmptyResx: coreDeps?.createEmptyResx ?? coreApi.createEmptyResx,
     updateResxResource: coreDeps?.updateResxResource ?? coreApi.updateResxResource,
     removeResxResource: coreDeps?.removeResxResource ?? coreApi.removeResxResource,
     scaffoldFormFiles: coreDeps?.scaffoldFormFiles ?? coreApi.scaffoldFormFiles,
+    scaffoldWinFormsProject:
+      coreDeps?.scaffoldWinFormsProject ?? coreApi.scaffoldWinFormsProject,
   };
 
-  const provider = new WinFormsCustomEditorProvider(context, core);
+  let provider: WinFormsCustomEditorProvider | undefined;
+
+  const projectRunner = new WinFormsProjectRunner({
+    workspaceState: context.workspaceState,
+    ...runnerOptions,
+    hasActiveDesigner:
+      runnerOptions?.hasActiveDesigner ?? (() => provider?.getActiveDesignerUri() !== undefined),
+    onOpenLivePreview:
+      runnerOptions?.onOpenLivePreview ??
+      (async (contextUri?: vscode.Uri) => {
+        if (provider?.revealActiveDesigner(contextUri)) {
+          return;
+        }
+        const targetUri = contextUri ?? vscode.window.activeTextEditor?.document.uri;
+        if (targetUri) {
+          await vscode.commands.executeCommand('winforms.openDesigner', targetUri);
+        }
+      }),
+  });
+  context.subscriptions.push(projectRunner);
+
+  provider = new WinFormsCustomEditorProvider(context, core, {
+    runProjectAction: async (action, uri) => {
+      if (action === 'run') {
+        await projectRunner.run(uri);
+      } else {
+        await projectRunner.build(uri);
+      }
+    },
+    onActiveDesignerChanged: () => {
+      projectRunner.updateStatusBarVisibility();
+    },
+  });
+  const activeProvider = provider;
+  const formsProvider = new WinFormsExplorerProvider();
+  context.subscriptions.push(formsProvider);
+
+  if (typeof vscode.window.registerTreeDataProvider === 'function') {
+    context.subscriptions.push(
+      vscode.window.registerTreeDataProvider('winformsDesigner.formsView', formsProvider)
+    );
+  }
 
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(
@@ -145,8 +246,9 @@ export function activateWithDeps(
 
   // Command: Open WinForms Designer
   context.subscriptions.push(
-    vscode.commands.registerCommand('winforms.openDesigner', async (uri?: vscode.Uri) => {
-      const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;
+    vscode.commands.registerCommand('winforms.openDesigner', async (arg?: unknown) => {
+      const targetUri =
+        extractUriFromCommandArg(arg) ?? vscode.window.activeTextEditor?.document.uri;
       if (!targetUri) {
         void vscode.window.showWarningMessage('Open a C# Form or UserControl file first.');
         return;
@@ -254,9 +356,9 @@ export function activateWithDeps(
 
   // Command: View Form Code
   context.subscriptions.push(
-    vscode.commands.registerCommand('winforms.viewCode', async (uri?: vscode.Uri) => {
+    vscode.commands.registerCommand('winforms.viewCode', async (arg?: unknown) => {
       const targetUri =
-        uri ??
+        extractUriFromCommandArg(arg) ??
         provider.getActiveDesignerUri() ??
         vscode.window.activeTextEditor?.document.uri;
 
@@ -273,9 +375,9 @@ export function activateWithDeps(
 
   // Command: View Designer Code Side by Side
   context.subscriptions.push(
-    vscode.commands.registerCommand('winforms.viewDesignerCode', async (uri?: vscode.Uri) => {
+    vscode.commands.registerCommand('winforms.viewDesignerCode', async (arg?: unknown) => {
       const targetUri =
-        uri ??
+        extractUriFromCommandArg(arg) ??
         provider.getActiveDesignerUri() ??
         vscode.window.activeTextEditor?.document.uri;
 
@@ -408,6 +510,8 @@ export function activateWithDeps(
       throw err;
     }
 
+    formsProvider.refresh();
+
     await vscode.commands.executeCommand(
       'vscode.openWith',
       vscode.Uri.file(designerPath),
@@ -426,6 +530,269 @@ export function activateWithDeps(
   context.subscriptions.push(
     vscode.commands.registerCommand('winforms.newUserControl', async (uri?: vscode.Uri) => {
       await createNewWinFormsItem('UserControl', uri);
+    })
+  );
+
+  // Command: New WinForms Project
+  context.subscriptions.push(
+    vscode.commands.registerCommand('winforms.newProject', async (arg?: unknown) => {
+      const parentDir = resolveTargetFolder(extractUriFromCommandArg(arg), provider);
+      if (!parentDir) {
+        void vscode.window.showWarningMessage(
+          'Open a workspace folder before creating a new WinForms project.'
+        );
+        return;
+      }
+
+      const rawProjectName = await vscode.window.showInputBox({
+        title: 'New WinForms Project',
+        prompt: 'Enter the project name (creates a new folder with .csproj, Program.cs, and MainForm)',
+        value: 'WinFormsApp1',
+        placeHolder: 'WinFormsApp1',
+        validateInput: (value) => {
+          const trimmed = value.trim();
+          const identError = validateCSharpIdentifier(trimmed);
+          if (identError) {
+            return identError;
+          }
+          const candidateDir = path.join(parentDir, trimmed);
+          if (fs.existsSync(candidateDir)) {
+            return `Folder "${trimmed}" already exists in this location.`;
+          }
+          return undefined;
+        },
+      });
+
+      if (!rawProjectName) {
+        return;
+      }
+
+      const projectName = rawProjectName.trim();
+      const identError = validateCSharpIdentifier(projectName);
+      if (identError) {
+        void vscode.window.showErrorMessage(identError);
+        return;
+      }
+
+      const projectDir = path.join(parentDir, projectName);
+      if (fs.existsSync(projectDir)) {
+        void vscode.window.showErrorMessage(
+          `Refusing to overwrite existing folder "${projectName}".`
+        );
+        return;
+      }
+
+      let targetFramework: coreApi.WinFormsTargetFramework = 'net10.0-windows';
+      let template: coreApi.FormTemplateId = 'blank';
+
+      if (typeof vscode.window.showQuickPick === 'function') {
+        const pickedTfm = await vscode.window.showQuickPick(
+          TARGET_FRAMEWORK_OPTIONS.map((o) => ({
+            label: o.label,
+            description: o.description,
+            tfm: o.tfm,
+          })),
+          {
+            title: 'Select Target Framework',
+            placeHolder: 'Choose the .NET target framework for the WinForms project',
+          }
+        );
+        if (!pickedTfm) {
+          return;
+        }
+        targetFramework = pickedTfm.tfm;
+
+        const pickedTemplate = await vscode.window.showQuickPick(
+          coreApi.FORM_TEMPLATES.map((t) => ({
+            label: t.label,
+            description: t.description,
+            template: t.id,
+          })),
+          {
+            title: 'Select Starter Form Template',
+            placeHolder: 'Choose a starter layout for MainForm',
+          }
+        );
+        if (!pickedTemplate) {
+          return;
+        }
+        template = pickedTemplate.template;
+      }
+
+      const scaffolded = core.scaffoldWinFormsProject({
+        projectName,
+        targetFramework,
+        template,
+      });
+
+      const csprojPath = path.join(projectDir, `${projectName}.csproj`);
+      const programPath = path.join(projectDir, 'Program.cs');
+      const formPath = path.join(projectDir, 'MainForm.cs');
+      const designerPath = path.join(projectDir, 'MainForm.Designer.cs');
+
+      const createdFiles: string[] = [];
+      let createdDir = false;
+      try {
+        fs.mkdirSync(projectDir, { recursive: false });
+        createdDir = true;
+        const filesToCreate: Array<[string, string]> = [
+          [csprojPath, scaffolded.csprojContent],
+          [programPath, scaffolded.programCsContent],
+          [formPath, scaffolded.formCsContent],
+          [designerPath, scaffolded.designerCsContent],
+        ];
+        for (const [filePath, content] of filesToCreate) {
+          fs.writeFileSync(filePath, content, { encoding: 'utf8', flag: 'wx' });
+          createdFiles.push(filePath);
+        }
+      } catch (err) {
+        for (const created of createdFiles.reverse()) {
+          try {
+            fs.unlinkSync(created);
+          } catch {
+            // Best-effort rollback
+          }
+        }
+        if (createdDir) {
+          try {
+            fs.rmdirSync(projectDir);
+          } catch {
+            // Best-effort rollback
+          }
+        }
+        if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+          void vscode.window.showErrorMessage(
+            `Refusing to overwrite existing project files in "${projectName}".`
+          );
+          return;
+        }
+        throw err;
+      }
+
+      formsProvider.refresh();
+
+      await vscode.commands.executeCommand(
+        'vscode.openWith',
+        vscode.Uri.file(designerPath),
+        WinFormsCustomEditorProvider.viewType
+      );
+    })
+  );
+
+  const resolveProjectActionUri = (arg?: unknown): vscode.Uri | undefined =>
+    extractUriFromCommandArg(arg) ??
+    activeProvider.getActiveDesignerUri() ??
+    vscode.window.activeTextEditor?.document.uri;
+
+  // Command: Build WinForms Project
+  context.subscriptions.push(
+    vscode.commands.registerCommand('winforms.buildApp', async (arg?: unknown) => {
+      await projectRunner.build(resolveProjectActionUri(arg));
+    })
+  );
+
+  // Command: Run WinForms Project
+  context.subscriptions.push(
+    vscode.commands.registerCommand('winforms.runApp', async (arg?: unknown) => {
+      await projectRunner.run(resolveProjectActionUri(arg));
+    })
+  );
+
+  // Command: Stop Running WinForms App
+  context.subscriptions.push(
+    vscode.commands.registerCommand('winforms.stopApp', async () => {
+      await projectRunner.stop();
+    })
+  );
+
+  // Command: Delete Form & Sibling Files
+  context.subscriptions.push(
+    vscode.commands.registerCommand('winforms.deleteForm', async (arg?: unknown) => {
+      const targetUri =
+        extractUriFromCommandArg(arg) ??
+        provider.getActiveDesignerUri() ??
+        vscode.window.activeTextEditor?.document.uri;
+
+      if (!targetUri || targetUri.scheme !== 'file') {
+        void vscode.window.showWarningMessage(
+          'No WinForms form file was selected to delete.'
+        );
+        return;
+      }
+
+      const resolved = resolveFormFiles(targetUri.fsPath);
+      if (!fs.existsSync(resolved.designerPath)) {
+        void vscode.window.showWarningMessage(
+          `"${path.basename(targetUri.fsPath)}" does not have a companion .Designer.cs file and was not deleted.`
+        );
+        return;
+      }
+
+      const cultureMap = findCultureResxFiles(resolved.directory, resolved.baseName);
+      const candidatePaths = [
+        resolved.codeBehindPath,
+        resolved.designerPath,
+        resolved.resxPath,
+        ...Object.keys(cultureMap)
+          .sort((a, b) => a.localeCompare(b))
+          .map((k) => cultureMap[k]),
+      ];
+
+      const filesToDelete: string[] = [];
+      for (const candidate of candidatePaths) {
+        if (!fs.existsSync(candidate)) continue;
+        if (filesToDelete.some((existing) => sameFilePath(existing, candidate))) continue;
+        filesToDelete.push(candidate);
+      }
+
+      if (filesToDelete.length === 0) {
+        void vscode.window.showWarningMessage(
+          `No files found on disk for "${resolved.baseName}".`
+        );
+        return;
+      }
+
+      const fileList = filesToDelete.map((f) => path.basename(f)).join(', ');
+      const choice = await vscode.window.showWarningMessage(
+        `Delete "${resolved.baseName}" and its sibling files (${fileList})?`,
+        { modal: true },
+        'Delete'
+      );
+
+      if (choice !== 'Delete') {
+        return;
+      }
+
+      const errors: string[] = [];
+      const hasWorkspaceFsDelete = typeof vscode.workspace.fs?.delete === 'function';
+      for (const filePath of filesToDelete) {
+        try {
+          if (hasWorkspaceFsDelete) {
+            await vscode.workspace.fs.delete(vscode.Uri.file(filePath), { useTrash: true });
+          } else {
+            fs.unlinkSync(filePath);
+          }
+        } catch (err) {
+          errors.push(
+            `${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+
+      formsProvider.refresh();
+
+      if (errors.length > 0) {
+        void vscode.window.showErrorMessage(
+          `Failed to delete some form files: ${errors.join('; ')}`
+        );
+      }
+    })
+  );
+
+  // Command: Refresh Forms Explorer
+  context.subscriptions.push(
+    vscode.commands.registerCommand('winforms.refreshFormsView', () => {
+      formsProvider.refresh();
     })
   );
 

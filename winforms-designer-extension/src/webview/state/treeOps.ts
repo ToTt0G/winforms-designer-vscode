@@ -559,7 +559,7 @@ export function cloneWithFreshIdentity(doc: DesignDocument, node: DesignNode, ta
     const name = generateUniqueName(doc, base, taken);
     const renamedText = typeof n.properties.Text === 'string' && n.properties.Text === n.name;
     const withText = renamedText ? setProps(n, { Text: name }) : n;
-    return {
+    const clone: DesignNode = {
       ...withText,
       id: uid(n.isComponent ? 'c' : 'n'),
       name,
@@ -568,6 +568,10 @@ export function cloneWithFreshIdentity(doc: DesignDocument, node: DesignNode, ta
       columns: n.columns?.map((col) => ({ ...col, id: uid('col'), name: generateUniqueName(doc, col.name.replace(/\d+$/, ''), taken) })),
       listViewColumns: n.listViewColumns?.map((col) => ({ ...col, id: uid('lvc'), name: generateUniqueName(doc, col.name.replace(/\d+$/, ''), taken) })),
     };
+    // Clones pasted/duplicated into a derived form are new editable derived controls, not inherited.
+    delete clone.inherited;
+    delete clone.inheritedFrom;
+    return clone;
   };
   return rec(c);
 }

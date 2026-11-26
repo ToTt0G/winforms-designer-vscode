@@ -18,6 +18,7 @@ export {
 
 export {
   decodeDotNetDecimalBits,
+  doesRawDataBindingMatchEntry,
   extractExtenderValues,
   parseDesignerCs,
   setExtenderValue,
@@ -35,6 +36,7 @@ export {
 } from './codeBehind';
 
 export {
+  createEmptyResx,
   parseResx,
   removeResxResource,
   updateResxResource,
@@ -43,9 +45,13 @@ export {
 export {
   FORM_TEMPLATES,
   scaffoldFormFiles,
+  scaffoldWinFormsProject,
   type FormTemplateId,
   type FormTemplateMetadata,
+  type ScaffoldedProjectFiles,
   type ScaffoldFormOptions,
+  type ScaffoldProjectOptions,
+  type WinFormsTargetFramework,
 } from './scaffold';
 
 export {

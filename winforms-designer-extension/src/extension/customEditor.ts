@@ -18,8 +18,12 @@ import type { HostToWebviewMessage, WebviewToHostMessage } from '../shared/proto
 import { getDesignerSettings, getThemeKind, updateDesignerSetting } from './config';
 import {
   detectProjectContext,
+  findBaseDesignerFile,
+  findCultureResxFiles,
+  isValidCultureTag,
   resolveFormFiles,
   sameFilePath,
+  validateCSharpIdentifier,
   type ResolvedFormFiles,
 } from './formResolver';
 import { GITHUB_REPO_URL, StarPromptController } from './starPrompt';
@@ -30,9 +34,11 @@ export interface CoreDependencies {
   parseCodeBehind: typeof coreApi.parseCodeBehind;
   ensureEventHandlerInCodeBehind: typeof coreApi.ensureEventHandlerInCodeBehind;
   parseResx: typeof coreApi.parseResx;
+  createEmptyResx: typeof coreApi.createEmptyResx;
   updateResxResource: typeof coreApi.updateResxResource;
   removeResxResource: typeof coreApi.removeResxResource;
   scaffoldFormFiles: typeof coreApi.scaffoldFormFiles;
+  scaffoldWinFormsProject: typeof coreApi.scaffoldWinFormsProject;
 }
 
 const DEFAULT_CORE_DEPS: CoreDependencies = {
@@ -41,19 +47,23 @@ const DEFAULT_CORE_DEPS: CoreDependencies = {
   parseCodeBehind: coreApi.parseCodeBehind,
   ensureEventHandlerInCodeBehind: coreApi.ensureEventHandlerInCodeBehind,
   parseResx: coreApi.parseResx,
+  createEmptyResx: coreApi.createEmptyResx,
   updateResxResource: coreApi.updateResxResource,
   removeResxResource: coreApi.removeResxResource,
   scaffoldFormFiles: coreApi.scaffoldFormFiles,
+  scaffoldWinFormsProject: coreApi.scaffoldWinFormsProject,
 };
 
 interface SessionState {
   document: vscode.TextDocument;
   webviewPanel: vscode.WebviewPanel;
   resolved: ResolvedFormFiles;
+  activeCulture: string;
   lastKnownDocument?: DesignDocument;
   lastParsedSource?: string;
   lastParsedMetadata?: DocumentStyleMetadata;
   applyChain: Promise<void>;
+  cultureWriteChain: Promise<void>;
   pendingSelfEdits: Set<string>;
   inFlightSelfEdits: Map<string, number>;
   acceptedSelfEditVersions: Set<number>;
@@ -68,9 +78,24 @@ interface ParsedDocumentPayload {
   hasCodeBehind: boolean;
   codeBehindHandlers: CodeBehindMethod[];
   resourceDataUris: Record<string, string>;
+  hasProject: boolean;
+  availableCultures: string[];
+  activeCulture: string;
+  cultureStrings: Record<string, string>;
   sourceText: string;
   documentVersion: number;
 }
+
+const MAX_INHERITANCE_DEPTH = 4;
+const NON_CUSTOM_BASE_CLASS_NAMES = new Set<string>([
+  'Form',
+  'UserControl',
+  'object',
+  'Object',
+  'IDisposable',
+  'IComponent',
+  'ISupportInitialize',
+]);
 
 const EXTERNAL_CHANGE_DEBOUNCE_MS = 200;
 const SELF_EDIT_GRACE_MS = 500;
@@ -202,6 +227,55 @@ function isPathConfinedToRoots(canonicalPath: string, canonicalRoots: string[]):
     const prefix = normRoot.endsWith(path.sep) ? normRoot : normRoot + path.sep;
     return target.startsWith(prefix);
   });
+}
+
+/**
+ * Ensures `filePath` is not a symlink (including a dangling symlink) and that its
+ * canonical directory/path stays strictly confined inside `allowedRoots`.
+ */
+function isConfinedNonSymlinkPath(
+  filePath: string,
+  allowedRoots: string[],
+  allowMissing = false
+): boolean {
+  const canonicalRoots = canonicalizeAllowedRoots(allowedRoots);
+  if (canonicalRoots.length === 0) {
+    return false;
+  }
+
+  let canonicalDir: string;
+  try {
+    canonicalDir = fs.realpathSync(path.dirname(path.resolve(filePath)));
+  } catch {
+    return false;
+  }
+
+  const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
+  const dirInRoots = canonicalRoots.some((root) => {
+    const a = caseInsensitive ? canonicalDir.toLowerCase() : canonicalDir;
+    const b = caseInsensitive ? root.toLowerCase() : root;
+    if (a === b) return true;
+    const prefix = b.endsWith(path.sep) ? b : b + path.sep;
+    return a.startsWith(prefix);
+  });
+  if (!dirInRoots) {
+    return false;
+  }
+
+  try {
+    const lstat = fs.lstatSync(filePath);
+    if (lstat.isSymbolicLink() || !lstat.isFile()) {
+      return false;
+    }
+    const canonicalFile = fs.realpathSync(filePath);
+    return isPathConfinedToRoots(canonicalFile, canonicalRoots);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT') {
+      return allowMissing;
+    }
+    return false;
+  }
 }
 
 function resolveFileRefOnDisk(
@@ -446,6 +520,11 @@ function copyImageIntoResourcesFolder(sourcePath: string, resxDir: string): stri
   return targetPath;
 }
 
+export interface CustomEditorCallbacks {
+  runProjectAction?: (action: 'build' | 'run', uri: vscode.Uri) => Promise<void> | void;
+  onActiveDesignerChanged?: (uri: vscode.Uri | undefined) => void;
+}
+
 export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = 'winformsDesigner.editor';
 
@@ -453,13 +532,16 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
   private lastActiveDesignerUri?: vscode.Uri;
   private readonly core: CoreDependencies;
   private readonly starPrompt: StarPromptController;
+  private readonly callbacks?: CustomEditorCallbacks;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    coreDeps?: Partial<CoreDependencies>
+    coreDeps?: Partial<CoreDependencies>,
+    callbacks?: CustomEditorCallbacks
   ) {
     this.core = { ...DEFAULT_CORE_DEPS, ...coreDeps };
     this.starPrompt = new StarPromptController(context.globalState);
+    this.callbacks = callbacks;
   }
 
   public getActiveDesignerUri(): vscode.Uri | undefined {
@@ -483,6 +565,43 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
     }
 
     return undefined;
+  }
+
+  public revealActiveDesigner(preferredUri?: vscode.Uri): boolean {
+    let targetSession: SessionState | undefined;
+
+    if (preferredUri && preferredUri.scheme === 'file') {
+      const resolved = resolveFormFiles(preferredUri.fsPath);
+      for (const session of this.sessions.values()) {
+        if (
+          !session.isDisposed &&
+          session.document.uri.scheme === 'file' &&
+          sameFilePath(session.document.uri.fsPath, resolved.designerPath)
+        ) {
+          targetSession = session;
+          break;
+        }
+      }
+    }
+
+    if (!targetSession) {
+      const activeUri = this.getActiveDesignerUri();
+      if (activeUri) {
+        const candidate = this.sessions.get(activeUri.toString());
+        if (candidate && !candidate.isDisposed) {
+          targetSession = candidate;
+        }
+      }
+    }
+
+    if (!targetSession) {
+      return false;
+    }
+
+    if (typeof targetSession.webviewPanel.reveal === 'function') {
+      targetSession.webviewPanel.reveal(undefined, false);
+    }
+    return true;
   }
 
   public async openCodeBehindForUri(uri: vscode.Uri, beside = false): Promise<void> {
@@ -545,7 +664,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
       document,
       webviewPanel,
       resolved,
+      activeCulture: 'default',
       applyChain: Promise.resolve(),
+      cultureWriteChain: Promise.resolve(),
       pendingSelfEdits: new Set<string>(),
       inFlightSelfEdits: new Map<string, number>(),
       acceptedSelfEditVersions: new Set<number>([document.version]),
@@ -554,6 +675,7 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
     };
     this.sessions.set(sessionKey, session);
     this.lastActiveDesignerUri = document.uri;
+    this.callbacks?.onActiveDesignerChanged?.(this.getActiveDesignerUri());
 
     const postMessage = (msg: HostToWebviewMessage): void => {
       if (!session.isDisposed) {
@@ -568,6 +690,7 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
         if (event.webviewPanel.active) {
           this.lastActiveDesignerUri = document.uri;
         }
+        this.callbacks?.onActiveDesignerChanged?.(this.getActiveDesignerUri());
       })
     );
 
@@ -610,8 +733,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
               }
             }
             try {
-              const payload = this.buildPayloadForDocument(session.document);
+              const payload = this.buildPayloadForDocument(session.document, session.activeCulture);
               session.resolved = payload.resolved;
+              session.activeCulture = payload.activeCulture;
               session.lastKnownDocument = payload.doc;
               session.lastParsedSource = payload.sourceText;
               session.lastParsedMetadata = payload.doc.metadata;
@@ -624,6 +748,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
                 resourceDataUris: payload.resourceDataUris,
                 source: 'external',
                 reason: isUndo ? 'undo' : 'redo',
+                availableCultures: payload.availableCultures,
+                activeCulture: payload.activeCulture,
+                cultureStrings: payload.cultureStrings,
               });
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
@@ -659,8 +786,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
             return;
           }
           try {
-            const payload = this.buildPayloadForDocument(session.document);
+            const payload = this.buildPayloadForDocument(session.document, session.activeCulture);
             session.resolved = payload.resolved;
+            session.activeCulture = payload.activeCulture;
             session.lastKnownDocument = payload.doc;
             session.lastParsedSource = payload.sourceText;
             session.lastParsedMetadata = payload.doc.metadata;
@@ -672,6 +800,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
               resourceDataUris: payload.resourceDataUris,
               source: 'external',
               reason: 'external',
+              availableCultures: payload.availableCultures,
+              activeCulture: payload.activeCulture,
+              cultureStrings: payload.cultureStrings,
             });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -729,10 +860,14 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
       for (const disposable of disposables) {
         disposable.dispose();
       }
+      this.callbacks?.onActiveDesignerChanged?.(this.getActiveDesignerUri());
     });
   }
 
-  public buildPayloadForDocument(document: vscode.TextDocument): ParsedDocumentPayload {
+  public buildPayloadForDocument(
+    document: vscode.TextDocument,
+    requestedCulture = 'default'
+  ): ParsedDocumentPayload {
     const resolved = resolveFormFiles(document.uri.fsPath);
     const sourceText = document.getText();
     const documentVersion = document.version;
@@ -743,6 +878,7 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
 
     const codeBehindRead = readFileOrOpenDocument(resolved.codeBehindPath);
     let baseType: 'Form' | 'UserControl' | undefined;
+    let customBaseClass: string | undefined;
     let codeBehindHandlers: CodeBehindMethod[] = [];
 
     if (codeBehindRead.exists && codeBehindRead.text !== undefined) {
@@ -752,6 +888,12 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
           baseType = 'UserControl';
         } else if (info.baseType === 'Form') {
           baseType = 'Form';
+        } else if (
+          info.baseType &&
+          !NON_CUSTOM_BASE_CLASS_NAMES.has(info.baseType) &&
+          validateCSharpIdentifier(info.baseType) === undefined
+        ) {
+          customBaseClass = info.baseType;
         }
         codeBehindHandlers = info.methods;
       } catch {
@@ -762,6 +904,7 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
 
     const doc = this.core.parseDesignerCs(sourceText, {
       baseType,
+      customBaseClass,
       resxXml,
     });
     if (doc.metadata) {
@@ -788,6 +931,11 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
       path.dirname(resolved.resxPath),
       allowedRoots
     );
+
+    // Static Inherited Form resolution when customBaseClass is present
+    if (doc.customBaseClass) {
+      this.resolveInheritedBaseForms(doc, resolved, allowedRoots, resourceDataUris);
+    }
 
     // Resolve `Properties.Resources.<Key>` references from project-level Properties/Resources.resx
     const projectResourceKeys = collectProjectResourceKeys(doc);
@@ -827,12 +975,24 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
       }
     }
 
+    // Culture-specific .resx discovery & localization state
+    const cultureState = this.resolveCultureState(resolved, requestedCulture);
+    doc.localizable = Boolean(
+      doc.form.properties.Localizable === true ||
+        cultureState.availableCultures.length > 1 ||
+        (doc.metadata.usesComponentResourceManager && Object.keys(doc.resources ?? {}).length > 0)
+    );
+
     return {
       doc,
       resolved,
       hasCodeBehind: codeBehindRead.exists,
       codeBehindHandlers,
       resourceDataUris,
+      hasProject: Boolean(projectCtx.csprojPath),
+      availableCultures: cultureState.availableCultures,
+      activeCulture: cultureState.activeCulture,
+      cultureStrings: cultureState.cultureStrings,
       sourceText,
       documentVersion,
     };
@@ -846,8 +1006,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
     try {
       switch (msg.type) {
         case 'ready': {
-          const payload = this.buildPayloadForDocument(session.document);
+          const payload = this.buildPayloadForDocument(session.document, session.activeCulture);
           session.resolved = payload.resolved;
+          session.activeCulture = payload.activeCulture;
           session.lastKnownDocument = payload.doc;
           session.lastParsedSource = payload.sourceText;
           session.lastParsedMetadata = payload.doc.metadata;
@@ -864,6 +1025,10 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
             codeBehindHandlers: payload.codeBehindHandlers,
             themeKind: getThemeKind(vscode.window.activeColorTheme),
             resourceDataUris: payload.resourceDataUris,
+            hasProject: payload.hasProject,
+            availableCultures: payload.availableCultures,
+            activeCulture: payload.activeCulture,
+            cultureStrings: payload.cultureStrings,
           });
 
           if (!payload.doc.metadata?.readOnlyReason) {
@@ -941,6 +1106,43 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
           await this.starPrompt.handleAction(msg.action);
           break;
         }
+
+        case 'switchCulture': {
+          this.handleSwitchCulture(session, msg, postMessage);
+          break;
+        }
+
+        case 'addCulture': {
+          session.cultureWriteChain = session.cultureWriteChain
+            .then(() => this.handleAddCulture(session, msg, postMessage))
+            .catch((err) => {
+              const errorMessage = err instanceof Error ? err.message : String(err);
+              void vscode.window.showErrorMessage(`WinForms Designer error: ${errorMessage}`);
+            });
+          await session.cultureWriteChain;
+          break;
+        }
+
+        case 'setCultureValue': {
+          session.cultureWriteChain = session.cultureWriteChain
+            .then(() => this.handleSetCultureValue(session, msg, postMessage))
+            .catch((err) => {
+              const errorMessage = err instanceof Error ? err.message : String(err);
+              void vscode.window.showErrorMessage(`WinForms Designer error: ${errorMessage}`);
+            });
+          await session.cultureWriteChain;
+          break;
+        }
+
+        case 'runProjectAction': {
+          if (this.callbacks?.runProjectAction) {
+            await this.callbacks.runProjectAction(msg.action, session.document.uri);
+          } else {
+            const cmd = msg.action === 'run' ? 'winforms.runApp' : 'winforms.buildApp';
+            await vscode.commands.executeCommand(cmd, session.document.uri);
+          }
+          break;
+        }
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -991,8 +1193,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
         reason: 'conflict',
       });
       try {
-        const payload = this.buildPayloadForDocument(session.document);
+        const payload = this.buildPayloadForDocument(session.document, session.activeCulture);
         session.resolved = payload.resolved;
+        session.activeCulture = payload.activeCulture;
         session.lastKnownDocument = payload.doc;
         session.lastParsedSource = payload.sourceText;
         session.lastParsedMetadata = payload.doc.metadata;
@@ -1005,6 +1208,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
           resourceDataUris: payload.resourceDataUris,
           source: 'external',
           reason: 'conflict',
+          availableCultures: payload.availableCultures,
+          activeCulture: payload.activeCulture,
+          cultureStrings: payload.cultureStrings,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1132,8 +1338,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
         reason: 'rejected',
       });
       try {
-        const payload = this.buildPayloadForDocument(session.document);
+        const payload = this.buildPayloadForDocument(session.document, session.activeCulture);
         session.resolved = payload.resolved;
+        session.activeCulture = payload.activeCulture;
         session.lastKnownDocument = payload.doc;
         session.lastParsedSource = payload.sourceText;
         session.lastParsedMetadata = payload.doc.metadata;
@@ -1145,6 +1352,9 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
           resourceDataUris: payload.resourceDataUris,
           source: 'host',
           reason: 'rejected',
+          availableCultures: payload.availableCultures,
+          activeCulture: payload.activeCulture,
+          cultureStrings: payload.cultureStrings,
         });
       } catch {
         // Ignore re-parse error on rollback
@@ -1418,5 +1628,577 @@ export class WinFormsCustomEditorProvider implements vscode.CustomTextEditorProv
   ): void {
     // Intentionally preserve .resx entries while the designer session is active so
     // Undo always restores the image cleanly and shared references never break.
+  }
+
+  private resolveInheritedBaseForms(
+    doc: DesignDocument,
+    resolved: ResolvedFormFiles,
+    allowedRoots: string[],
+    resourceDataUris: Record<string, string>
+  ): void {
+    const visitedClasses = new Set<string>([doc.className.toLowerCase()]);
+    const visitedPaths = new Set<string>();
+    try {
+      visitedPaths.add(fs.realpathSync(resolved.designerPath));
+    } catch {
+      visitedPaths.add(path.resolve(resolved.designerPath));
+    }
+
+    const chain: Array<{ baseClassName: string; baseDoc: DesignDocument; baseResolved: ResolvedFormFiles }> = [];
+    let currentBaseName: string | undefined = doc.customBaseClass;
+
+    while (currentBaseName && chain.length < MAX_INHERITANCE_DEPTH) {
+      const lowerName = currentBaseName.toLowerCase();
+      if (visitedClasses.has(lowerName)) {
+        break;
+      }
+      visitedClasses.add(lowerName);
+
+      const baseDesignerPath = findBaseDesignerFile(currentBaseName, allowedRoots, allowedRoots, 5);
+      if (!baseDesignerPath) {
+        break;
+      }
+      if (visitedPaths.has(baseDesignerPath)) {
+        break;
+      }
+      visitedPaths.add(baseDesignerPath);
+
+      const baseRead = readFileOrOpenDocument(baseDesignerPath);
+      if (!baseRead.exists || baseRead.text === undefined) {
+        break;
+      }
+
+      const baseResolved = resolveFormFiles(baseDesignerPath);
+      const baseResxRead = isConfinedNonSymlinkPath(baseResolved.resxPath, allowedRoots, false)
+        ? readFileOrOpenDocument(baseResolved.resxPath)
+        : { exists: false, text: undefined };
+      const baseResxXml = baseResxRead.exists ? baseResxRead.text : undefined;
+      const baseCbRead = isConfinedNonSymlinkPath(baseResolved.codeBehindPath, allowedRoots, false)
+        ? readFileOrOpenDocument(baseResolved.codeBehindPath)
+        : { exists: false, text: undefined };
+
+      let nextBaseType: 'Form' | 'UserControl' | undefined;
+      let nextCustomBase: string | undefined;
+      if (baseCbRead.exists && baseCbRead.text !== undefined) {
+        try {
+          const info = this.core.parseCodeBehind(baseCbRead.text);
+          if (info.baseType === 'UserControl') {
+            nextBaseType = 'UserControl';
+          } else if (info.baseType === 'Form') {
+            nextBaseType = 'Form';
+          } else if (
+            info.baseType &&
+            !NON_CUSTOM_BASE_CLASS_NAMES.has(info.baseType) &&
+            validateCSharpIdentifier(info.baseType) === undefined
+          ) {
+            nextCustomBase = info.baseType;
+          }
+        } catch {
+          // Ignore malformed base code-behind
+        }
+      }
+
+      try {
+        const baseDoc = this.core.parseDesignerCs(baseRead.text, {
+          baseType: nextBaseType,
+          customBaseClass: nextCustomBase,
+          resxXml: baseResxXml,
+        });
+        chain.push({ baseClassName: currentBaseName, baseDoc, baseResolved });
+        currentBaseName = baseDoc.customBaseClass;
+      } catch {
+        break;
+      }
+    }
+
+    if (chain.length === 0) {
+      return;
+    }
+
+    // Propagate UserControl baseType if the resolved inheritance chain terminates at UserControl
+    const rootAncestor = chain[chain.length - 1];
+    if (rootAncestor.baseDoc.baseType === 'UserControl') {
+      doc.baseType = 'UserControl';
+      doc.form.type = 'UserControl';
+      doc.form.fullTypeName = 'System.Windows.Forms.UserControl';
+    }
+
+    // Collect existing names on derived form (including strip items and columns) so inherited items never collide
+    const existingNames = new Set<string>();
+    const collectStripNames = (items?: StripItemNode[]): void => {
+      if (!items) return;
+      for (const item of items) {
+        existingNames.add(item.name);
+        collectStripNames(item.dropDownItems);
+      }
+    };
+    const collectNodeNames = (node: DesignNode): void => {
+      existingNames.add(node.name);
+      collectStripNames(node.stripItems);
+      node.columns?.forEach((c) => existingNames.add(c.name));
+      node.listViewColumns?.forEach((c) => existingNames.add(c.name));
+      for (const child of node.children) {
+        collectNodeNames(child);
+      }
+    };
+    for (const child of doc.form.children) {
+      collectNodeNames(child);
+    }
+    for (const comp of doc.components) {
+      collectNodeNames(comp);
+    }
+
+    const markNodeInherited = (node: DesignNode, fromClass: string): DesignNode => {
+      const cloned: DesignNode = {
+        ...structuredClone(node),
+        inherited: true,
+        inheritedFrom: fromClass,
+        children: node.children
+          .filter((c) => !existingNames.has(c.name))
+          .map((c) => markNodeInherited(c, fromClass)),
+      };
+      existingNames.add(cloned.name);
+      return cloned;
+    };
+
+    const inheritedChildren: DesignNode[] = [];
+    const inheritedComponents: DesignNode[] = [];
+
+    // Walk from furthest ancestor to immediate base so base controls are prepended in inheritance order
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const { baseClassName, baseDoc, baseResolved } = chain[i];
+      for (const child of baseDoc.form.children) {
+        if (!existingNames.has(child.name)) {
+          inheritedChildren.push(markNodeInherited(child, baseClassName));
+        }
+      }
+      for (const comp of baseDoc.components) {
+        if (!existingNames.has(comp.name)) {
+          inheritedComponents.push(markNodeInherited(comp, baseClassName));
+        }
+      }
+
+      // Resolve any inherited form image/icon resources for canvas preview
+      const baseResUris = resolveResourceDataUris(
+        baseDoc.resources ?? {},
+        path.dirname(baseResolved.resxPath),
+        allowedRoots
+      );
+      for (const [key, uri] of Object.entries(baseResUris)) {
+        if (!(key in resourceDataUris)) {
+          resourceDataUris[key] = uri;
+        }
+      }
+    }
+
+    if (inheritedChildren.length > 0) {
+      doc.form.children = [...inheritedChildren, ...doc.form.children];
+    }
+    if (inheritedComponents.length > 0) {
+      doc.components = [...inheritedComponents, ...doc.components];
+    }
+
+    // Inherit base visual defaults (ClientSize, BackColor, Font, and Size for UserControl) ONLY if unset on derived.
+    // Record them in inheritedDefaultProperties so saving unrelated edits never turns base defaults into overrides.
+    const inheritedVisualProps =
+      doc.baseType === 'UserControl'
+        ? ['Size', 'ClientSize', 'BackColor', 'Font']
+        : ['ClientSize', 'BackColor', 'Font'];
+    const inheritedDefaults: Record<string, PropertyValue> = {};
+    for (const { baseDoc } of chain) {
+      for (const prop of inheritedVisualProps) {
+        if (
+          !(prop in doc.form.properties) &&
+          baseDoc.form.properties[prop] !== undefined
+        ) {
+          const clonedVal = structuredClone(baseDoc.form.properties[prop]);
+          doc.form.properties[prop] = clonedVal;
+          inheritedDefaults[prop] = structuredClone(clonedVal);
+        }
+      }
+    }
+    if (Object.keys(inheritedDefaults).length > 0) {
+      doc.form.inheritedDefaultProperties = inheritedDefaults;
+    }
+  }
+
+  private extractCultureStrings(resxPath: string): Record<string, string> {
+    const read = readFileOrOpenDocument(resxPath);
+    if (!read.exists || !read.text) {
+      return {};
+    }
+    try {
+      const parsed = this.core.parseResx(read.text);
+      const result: Record<string, string> = {};
+      for (const [name, entry] of Object.entries(parsed)) {
+        if (entry.kind === 'string') {
+          result[name] = entry.value;
+        }
+      }
+      return result;
+    } catch {
+      return {};
+    }
+  }
+
+  private resolveCultureState(
+    resolved: ResolvedFormFiles,
+    requestedCulture: string
+  ): {
+    availableCultures: string[];
+    activeCulture: string;
+    cultureStrings: Record<string, string>;
+    cultureMap: Record<string, string>;
+  } {
+    const cultureMap = findCultureResxFiles(resolved.directory, resolved.baseName);
+    const sortedCultures = Object.keys(cultureMap).sort((a, b) => a.localeCompare(b));
+    const availableCultures = ['default', ...sortedCultures];
+
+    let activeCulture = 'default';
+    if (requestedCulture && requestedCulture !== 'default') {
+      if (requestedCulture in cultureMap) {
+        activeCulture = requestedCulture;
+      } else {
+        const lowerReq = requestedCulture.toLowerCase();
+        const matched = sortedCultures.find((c) => c.toLowerCase() === lowerReq);
+        if (matched) {
+          activeCulture = matched;
+        }
+      }
+    }
+
+    const resxPath =
+      activeCulture === 'default' ? resolved.resxPath : cultureMap[activeCulture];
+    const cultureStrings = resxPath ? this.extractCultureStrings(resxPath) : {};
+
+    return {
+      availableCultures,
+      activeCulture,
+      cultureStrings,
+      cultureMap,
+    };
+  }
+
+  private handleSwitchCulture(
+    session: SessionState,
+    msg: Extract<WebviewToHostMessage, { type: 'switchCulture' }>,
+    postMessage: (msg: HostToWebviewMessage) => void
+  ): void {
+    const requested = typeof msg.culture === 'string' ? msg.culture.trim() : '';
+    if (requested !== 'default' && !isValidCultureTag(requested)) {
+      void vscode.window.showWarningMessage(`Invalid culture tag "${msg.culture}".`);
+      return;
+    }
+
+    session.resolved = resolveFormFiles(session.document.uri.fsPath);
+    const state = this.resolveCultureState(session.resolved, requested);
+    session.activeCulture = state.activeCulture;
+
+    postMessage({
+      type: 'cultureChanged',
+      activeCulture: state.activeCulture,
+      availableCultures: state.availableCultures,
+      cultureStrings: state.cultureStrings,
+    });
+  }
+
+  private handleAddCulture(
+    session: SessionState,
+    msg: Extract<WebviewToHostMessage, { type: 'addCulture' }>,
+    postMessage: (msg: HostToWebviewMessage) => void
+  ): void {
+    const culture = typeof msg.culture === 'string' ? msg.culture.trim() : '';
+    if (!isValidCultureTag(culture)) {
+      void vscode.window.showWarningMessage(
+        `Invalid culture tag "${msg.culture}". Expected a BCP-47 tag such as "de", "fr-FR", or "zh-Hans".`
+      );
+      return;
+    }
+
+    session.resolved = resolveFormFiles(session.document.uri.fsPath);
+    const existingMap = findCultureResxFiles(session.resolved.directory, session.resolved.baseName);
+    const lowerCulture = culture.toLowerCase();
+    const existingKey = Object.keys(existingMap).find((k) => k.toLowerCase() === lowerCulture);
+
+    let effectiveCulture = existingKey ?? culture;
+    if (!existingKey) {
+      const targetPath = path.join(
+        session.resolved.directory,
+        `${session.resolved.baseName}.${culture}.resx`
+      );
+      if (!isConfinedNonSymlinkPath(targetPath, [session.resolved.directory], true)) {
+        void vscode.window.showWarningMessage(
+          `Refusing to write culture file "${path.basename(targetPath)}" outside the form directory or through a symbolic link.`
+        );
+        return;
+      }
+
+      if (!fs.existsSync(targetPath)) {
+        const eol = session.lastParsedMetadata?.eol ?? '\r\n';
+        try {
+          fs.writeFileSync(targetPath, this.core.createEmptyResx(eol), {
+            encoding: 'utf8',
+            flag: 'wx',
+          });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') {
+            throw err;
+          }
+        }
+      }
+      effectiveCulture = culture;
+    }
+
+    const state = this.resolveCultureState(session.resolved, effectiveCulture);
+    session.activeCulture = state.activeCulture;
+
+    postMessage({
+      type: 'cultureChanged',
+      activeCulture: state.activeCulture,
+      availableCultures: state.availableCultures,
+      cultureStrings: state.cultureStrings,
+    });
+  }
+
+  private async writeResxEntryConfined(
+    targetPath: string,
+    allowedDir: string,
+    key: string,
+    value: string
+  ): Promise<boolean> {
+    if (!isConfinedNonSymlinkPath(targetPath, [allowedDir], true)) {
+      throw new Error(
+        `Refusing to write "${path.basename(targetPath)}" outside the form directory or through a symbolic link.`
+      );
+    }
+
+    const resxRead = readFileOrOpenDocument(targetPath);
+    const existingXml = resxRead.exists ? (resxRead.text ?? null) : null;
+    const updatedXml = this.core.updateResxResource(existingXml, {
+      name: key,
+      kind: 'string',
+      value,
+    });
+
+    const openResxDoc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.scheme === 'file' && sameFilePath(d.uri.fsPath, targetPath)
+    );
+    if (openResxDoc) {
+      const resxEdit = new vscode.WorkspaceEdit();
+      const curText = openResxDoc.getText();
+      resxEdit.replace(
+        openResxDoc.uri,
+        new vscode.Range(openResxDoc.positionAt(0), openResxDoc.positionAt(curText.length)),
+        updatedXml
+      );
+      return await vscode.workspace.applyEdit(resxEdit);
+    }
+
+    if (fs.existsSync(targetPath)) {
+      if (!isConfinedNonSymlinkPath(targetPath, [allowedDir], false)) {
+        throw new Error(
+          `Refusing to overwrite symbolic link "${path.basename(targetPath)}".`
+        );
+      }
+      fs.writeFileSync(targetPath, updatedXml, 'utf8');
+      return true;
+    }
+
+    try {
+      fs.writeFileSync(targetPath, updatedXml, { encoding: 'utf8', flag: 'wx' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+        if (!isConfinedNonSymlinkPath(targetPath, [allowedDir], false)) {
+          throw new Error(
+            `Refusing to overwrite symbolic link "${path.basename(targetPath)}".`
+          );
+        }
+        fs.writeFileSync(targetPath, updatedXml, 'utf8');
+      } else {
+        throw err;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Ensures a localized Text key actually takes effect at .NET runtime:
+   * seeds the neutral `<Form>.resx` with the control's default Text if missing, and
+   * converts a plain literal `Text` assignment in `.Designer.cs` to `resources.GetString(key)`.
+   */
+  private async ensureRuntimeResourceLookupForTextKey(
+    session: SessionState,
+    key: string,
+    postMessage: (msg: HostToWebviewMessage) => void
+  ): Promise<void> {
+    if (!key.endsWith('.Text')) {
+      return;
+    }
+    const baseDoc = session.lastKnownDocument;
+    if (!baseDoc || baseDoc.metadata?.readOnlyReason) {
+      return;
+    }
+
+    const ownerName = key.slice(0, -'.Text'.length);
+    let targetNode: DesignNode | undefined;
+    if (ownerName === '$this') {
+      targetNode = baseDoc.form;
+    } else {
+      const walk = (n: DesignNode): DesignNode | undefined => {
+        if (n.name === ownerName && !n.inherited) return n;
+        for (const c of n.children) {
+          const found = walk(c);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      targetNode = walk(baseDoc.form);
+    }
+
+    if (!targetNode || typeof targetNode.properties.Text !== 'string') {
+      return;
+    }
+
+    // If the node already uses ComponentResourceManager.ApplyResources(...), runtime already reads .resx
+    const hasApplyResources = (targetNode.rawStatements ?? []).some((s) =>
+      /\bApplyResources\s*\(/.test(s)
+    );
+    if (hasApplyResources) {
+      return;
+    }
+
+    const neutralText = targetNode.properties.Text;
+    const neutralResxPath = session.resolved.resxPath;
+    if (!isConfinedNonSymlinkPath(neutralResxPath, [session.resolved.directory], true)) {
+      return;
+    }
+
+    // Seed neutral .resx if the key is not already stored there
+    const neutralRead = readFileOrOpenDocument(neutralResxPath);
+    const neutralEntries =
+      neutralRead.exists && neutralRead.text ? this.core.parseResx(neutralRead.text) : {};
+    if (!neutralEntries[key]) {
+      const seeded = await this.writeResxEntryConfined(
+        neutralResxPath,
+        session.resolved.directory,
+        key,
+        neutralText
+      );
+      if (!seeded) {
+        return;
+      }
+    }
+
+    // Update the node's Text property in .Designer.cs to a String ResourceValue so generator emits resources.GetString(...)
+    const nextDoc = structuredClone(baseDoc);
+    let nextTarget: DesignNode | undefined;
+    if (ownerName === '$this') {
+      nextTarget = nextDoc.form;
+    } else {
+      const walkNext = (n: DesignNode): DesignNode | undefined => {
+        if (n.name === ownerName && !n.inherited) return n;
+        for (const c of n.children) {
+          const found = walkNext(c);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      nextTarget = walkNext(nextDoc.form);
+    }
+    if (!nextTarget || typeof nextTarget.properties.Text !== 'string') {
+      return;
+    }
+
+    nextTarget.properties.Text = {
+      kind: 'resource',
+      resourceName: key,
+      resourceType: 'String',
+    };
+    if (nextTarget.rawPropertyExpressions) {
+      delete nextTarget.rawPropertyExpressions.Text;
+    }
+    nextDoc.resources = {
+      ...(nextDoc.resources ?? {}),
+      [key]: { name: key, kind: 'string', value: neutralText },
+    };
+
+    session.applyChain = session.applyChain
+      .then(() =>
+        this.applyDocumentEdit(
+          session,
+          {
+            type: 'applyDocument',
+            document: nextDoc,
+            baseDocumentVersion: session.document.version,
+            description: `Localize ${key}`,
+          },
+          postMessage
+        )
+      )
+      .catch(() => {
+        // Best-effort runtime wiring; culture .resx write already succeeded
+      });
+    await session.applyChain;
+  }
+
+  private async handleSetCultureValue(
+    session: SessionState,
+    msg: Extract<WebviewToHostMessage, { type: 'setCultureValue' }>,
+    postMessage: (msg: HostToWebviewMessage) => void
+  ): Promise<void> {
+    const culture = typeof msg.culture === 'string' ? msg.culture.trim() : '';
+    if (culture === 'default' || !isValidCultureTag(culture)) {
+      void vscode.window.showWarningMessage(
+        `Cannot write localized value: invalid culture tag "${msg.culture}".`
+      );
+      return;
+    }
+    if (!msg.key || typeof msg.key !== 'string') {
+      return;
+    }
+
+    session.resolved = resolveFormFiles(session.document.uri.fsPath);
+    const existingMap = findCultureResxFiles(session.resolved.directory, session.resolved.baseName);
+    const lowerCulture = culture.toLowerCase();
+    const existingKey = Object.keys(existingMap).find((k) => k.toLowerCase() === lowerCulture);
+    const effectiveCulture = existingKey ?? culture;
+
+    const targetPath =
+      (existingKey ? existingMap[existingKey] : undefined) ??
+      path.join(session.resolved.directory, `${session.resolved.baseName}.${culture}.resx`);
+
+    if (!isConfinedNonSymlinkPath(targetPath, [session.resolved.directory], true)) {
+      void vscode.window.showWarningMessage(
+        `Refusing to write localized resource "${path.basename(targetPath)}" outside the form directory or through a symbolic link.`
+      );
+      return;
+    }
+
+    const applied = await this.writeResxEntryConfined(
+      targetPath,
+      session.resolved.directory,
+      msg.key,
+      msg.value
+    );
+
+    if (applied) {
+      await this.ensureRuntimeResourceLookupForTextKey(session, msg.key, postMessage);
+    }
+
+    const state = this.resolveCultureState(session.resolved, effectiveCulture);
+    session.activeCulture = state.activeCulture;
+
+    postMessage({
+      type: 'cultureChanged',
+      activeCulture: state.activeCulture,
+      availableCultures: state.availableCultures,
+      cultureStrings: state.cultureStrings,
+    });
+
+    if (!applied) {
+      void vscode.window.showWarningMessage(
+        `Could not apply edit to open "${path.basename(targetPath)}" document; reverted preview to buffer contents.`
+      );
+    }
   }
 }

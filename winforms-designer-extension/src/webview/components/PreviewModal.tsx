@@ -8,7 +8,7 @@ import { getNode, propagateAnchors, setNodeRect, setProps, updateNode, updateNod
 import { computeLayoutTree } from '../state/layoutEngine';
 import { clampSize, getBool, getEnum, getSize, getNumber, getString } from '../state/nodeProps';
 import { Icon } from './ControlIcons';
-import { cursorCss, FormClient, formSurfaceStyle, type PreviewRuntime, type RenderContext } from './ControlRenderer';
+import { cursorCss, FormClient, formSurfaceStyle, localizedText, type PreviewRuntime, type RenderContext } from './ControlRenderer';
 import { FormChrome } from './FormChrome';
 
 const DPI_SCALES = [1, 1.25, 1.5] as const;
@@ -101,6 +101,11 @@ export function PreviewModal({ state, store }: { state: DesignerState; store: De
   useEffect(() => {
     closeRef.current?.focus();
     const key = (e: KeyboardEvent) => {
+      // An open ToolStrip dropdown consumes the first Escape (it closes itself), like a real menu loop.
+      if (e.key === 'Escape' && document.querySelector('.wd-preview .wf-dropdown')) {
+        e.stopPropagation();
+        return;
+      }
       if (e.key === 'Escape') {
         e.stopPropagation();
         close();
@@ -168,7 +173,13 @@ export function PreviewModal({ state, store }: { state: DesignerState; store: De
       resourceDataUris: state.resourceDataUris,
       mode: 'preview',
       preview: runtime,
+      cultureStrings: state.activeCulture !== 'default' ? state.cultureStrings : undefined,
+      resources: doc.resources,
       onTabClick: (id, index) => setActiveTabs((s) => ({ ...s, [id]: index })),
+      onStripItemClick: (item) => {
+        const handler = item.events?.Click;
+        setStatus(handler ? `${item.name} clicked, which runs ${handler}()` : `${item.name} clicked. No Click handler is bound yet.`);
+      },
       onSplitterPointerDown: (e, id) => {
         e.preventDefault();
         e.stopPropagation();
@@ -189,7 +200,7 @@ export function PreviewModal({ state, store }: { state: DesignerState; store: De
         };
       },
     }),
-    [layout, style, state.resourceDataUris, runtime, doc]
+    [layout, style, state.resourceDataUris, runtime, doc, state.activeCulture, state.cultureStrings]
   );
 
   const onClick = (e: React.MouseEvent) => {
@@ -259,7 +270,12 @@ export function PreviewModal({ state, store }: { state: DesignerState; store: De
         <div className="wd-preview-stage">
           <div className="wd-preview-scale" style={windowBox ? { width: windowBox.width * dpi, height: windowBox.height * dpi } : undefined}>
           <div ref={windowRef} className="wd-preview-window" onClick={onClick} style={{ transform: dpi === 1 ? undefined : `scale(${dpi})` }} data-dpi={dpi}>
-            <FormChrome root={doc.form} style={style} resourceDataUris={state.resourceDataUris}>
+            <FormChrome
+              root={doc.form}
+              style={style}
+              resourceDataUris={state.resourceDataUris}
+              titleOverride={localizedText(doc.form, state.activeCulture !== 'default' ? state.cultureStrings : undefined, doc.resources)}
+            >
               <div className={`wf-client wf-${style} wf-live`} style={{ width: size.width, height: size.height, ...formSurfaceStyle(doc.form, state.resourceDataUris), cursor: cursorCss(doc.form) }}>
                 <FormClient root={doc.form} ctx={ctx} />
               </div>

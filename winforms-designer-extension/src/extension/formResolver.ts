@@ -1,5 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { CULTURE_TAG_RE, isValidCultureTag } from '../shared/protocol';
+
+export { CULTURE_TAG_RE, isValidCultureTag };
 
 export interface ResolvedFormFiles {
   baseName: string;
@@ -103,6 +106,7 @@ const MAX_CSPROJ_SEARCH_DEPTH = 8;
 const MODERN_NET_TFM_RE = /^net(?:6|7|8|9|10)(?:\.\d+)?(?:-.+)?$/i;
 const DESIGNER_FILE_RE = /^(.+)\.designer\.cs$/i;
 const CS_FILE_RE = /^(.+)\.cs$/i;
+const IGNORED_SEARCH_DIRS = new Set(['bin', 'obj', 'node_modules', '.git', '.vs']);
 
 /**
  * Checks exact path first, then scans directory case-insensitively so sibling files
@@ -389,4 +393,201 @@ export function sameFilePath(a: string, b: string): boolean {
     return normA.toLowerCase() === normB.toLowerCase();
   }
   return normA === normB;
+}
+
+/**
+ * Discovers culture-specific `.resx` files (`<baseName>.<culture>.resx`) in `directory`.
+ * Strictly rejects symlinks and paths resolving outside `directory`, deduplicating
+ * case-insensitively so case variants never appear as duplicate cultures.
+ */
+export function findCultureResxFiles(
+  directory: string,
+  baseName: string
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!directory || !baseName) {
+    return result;
+  }
+
+  let canonicalDir: string;
+  let entries: string[];
+  try {
+    canonicalDir = fs.realpathSync(directory);
+    entries = fs.readdirSync(directory).sort((a, b) => a.localeCompare(b));
+  } catch {
+    return result;
+  }
+
+  const prefixLower = `${baseName.toLowerCase()}.`;
+  const suffixLower = '.resx';
+  const seenLowerCultures = new Set<string>();
+
+  for (const entry of entries) {
+    const lower = entry.toLowerCase();
+    if (!lower.startsWith(prefixLower) || !lower.endsWith(suffixLower)) {
+      continue;
+    }
+    const culture = entry.slice(baseName.length + 1, entry.length - suffixLower.length);
+    if (!isValidCultureTag(culture)) {
+      continue;
+    }
+    const lowerCulture = culture.toLowerCase();
+    if (seenLowerCultures.has(lowerCulture)) {
+      continue;
+    }
+    const fullPath = path.join(directory, entry);
+    try {
+      const lstat = fs.lstatSync(fullPath);
+      if (lstat.isSymbolicLink() || !lstat.isFile()) {
+        continue;
+      }
+      const canonicalFile = fs.realpathSync(fullPath);
+      if (!isCanonicalPathWithinRoots(canonicalFile, [canonicalDir])) {
+        continue;
+      }
+      seenLowerCultures.add(lowerCulture);
+      result[culture] = fullPath;
+    } catch {
+      // Skip unreadable entries
+    }
+  }
+
+  return result;
+}
+
+function isCanonicalPathWithinRoots(canonicalPath: string, canonicalRoots: string[]): boolean {
+  const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
+  const target = caseInsensitive ? canonicalPath.toLowerCase() : canonicalPath;
+  return canonicalRoots.some((root) => {
+    const normRoot = caseInsensitive ? root.toLowerCase() : root;
+    if (target === normRoot) {
+      return true;
+    }
+    const prefix = normRoot.endsWith(path.sep) ? normRoot : normRoot + path.sep;
+    return target.startsWith(prefix);
+  });
+}
+
+/**
+ * Statically searches `searchRoots` (bounded to `maxDepth`, ignoring build/VCS folders,
+ * cycle-protected and strictly confined to `allowedRoots`) for `<baseClassName>.Designer.cs`
+ * (case-insensitive).
+ */
+export function findBaseDesignerFile(
+  baseClassName: string,
+  searchRoots: string[],
+  allowedRoots?: string[],
+  maxDepth = 5
+): string | undefined {
+  if (!baseClassName || validateCSharpIdentifier(baseClassName) !== undefined) {
+    return undefined;
+  }
+
+  const effectiveAllowed = allowedRoots && allowedRoots.length > 0 ? allowedRoots : searchRoots;
+  const canonicalAllowed: string[] = [];
+  for (const root of effectiveAllowed) {
+    if (!root) continue;
+    try {
+      const real = fs.realpathSync(root);
+      if (!canonicalAllowed.includes(real)) {
+        canonicalAllowed.push(real);
+      }
+    } catch {
+      // Skip missing root
+    }
+  }
+  if (canonicalAllowed.length === 0) {
+    return undefined;
+  }
+
+  const targetLower = `${baseClassName.toLowerCase()}.designer.cs`;
+  const visitedDirs = new Set<string>();
+
+  for (const root of searchRoots) {
+    if (!root) continue;
+    let canonicalRoot: string;
+    try {
+      canonicalRoot = fs.realpathSync(root);
+      if (!fs.statSync(canonicalRoot).isDirectory()) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    if (!isCanonicalPathWithinRoots(canonicalRoot, canonicalAllowed)) {
+      continue;
+    }
+
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: canonicalRoot, depth: 0 }];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const dirKey =
+        process.platform === 'win32' || process.platform === 'darwin'
+          ? current.dir.toLowerCase()
+          : current.dir;
+      if (visitedDirs.has(dirKey)) {
+        continue;
+      }
+      visitedDirs.add(dirKey);
+
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(current.dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      const subdirs: string[] = [];
+      for (const entry of entries) {
+        const lowerName = entry.name.toLowerCase();
+        const fullPath = path.join(current.dir, entry.name);
+
+        if (lowerName === targetLower) {
+          try {
+            const lstat = fs.lstatSync(fullPath);
+            if (lstat.isSymbolicLink()) {
+              continue;
+            }
+            const canonicalFile = fs.realpathSync(fullPath);
+            if (
+              isCanonicalPathWithinRoots(canonicalFile, canonicalAllowed) &&
+              fs.statSync(canonicalFile).isFile()
+            ) {
+              const content = fs.readFileSync(canonicalFile, 'utf8');
+              const classDeclRe = new RegExp(`\\bclass\\s+${baseClassName}\\b`);
+              if (classDeclRe.test(content)) {
+                return canonicalFile;
+              }
+            }
+          } catch {
+            // Skip broken symlinks or unreadable files
+          }
+          continue;
+        }
+
+        if (current.depth >= maxDepth) {
+          continue;
+        }
+
+        if (entry.isDirectory() && !IGNORED_SEARCH_DIRS.has(lowerName)) {
+          try {
+            const canonicalSub = fs.realpathSync(fullPath);
+            if (isCanonicalPathWithinRoots(canonicalSub, canonicalAllowed)) {
+              subdirs.push(canonicalSub);
+            }
+          } catch {
+            // Skip broken symlinks
+          }
+        }
+      }
+
+      subdirs.sort((a, b) => a.localeCompare(b));
+      for (const sub of subdirs) {
+        queue.push({ dir: sub, depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return undefined;
 }
